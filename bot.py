@@ -31,7 +31,7 @@ BOT_USERNAME = "@VipDramlarBot"             # Bot username (@ siz)
 
 # JSONBin.io sozlamalari
 JSONBIN_API_KEY = "$2a$10$mQZC26SFNwuUJbIo3fANVO3eiIMW4jWdJTva4/6tBlESt4AAde.mi"
-JSONBIN_BIN_ID = "YOUR_BIN_ID"        # jsonbin.io dan yarating
+JSONBIN_BIN_ID = "69cc43a2856a682189e936f0"        # jsonbin.io dan yarating
 JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
 
 # ============================================================
