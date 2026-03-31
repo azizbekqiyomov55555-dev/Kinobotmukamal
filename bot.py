@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # ⚙️ SOZLAMALAR - O'zgartiring!
 # ============================================================
-BOT_TOKEN = "YOUR_BOT_TOKEN"          # @BotFather dan oling
-ADMIN_IDS = [123456789]               # Admin Telegram ID
-CHANNEL_ID = "@your_channel"          # Kanal username
-BOT_USERNAME = "your_bot"             # Bot username (@ siz)
+BOT_TOKEN = "8693668045:AAGY-fCRkzaDNO9xHqJAFcrpI_OLpYIBMdI"          # @BotFather dan oling
+ADMIN_IDS = [8537782289]               # Admin Telegram ID
+CHANNEL_ID = "@Azizbekl2026"          # Kanal username
+BOT_USERNAME = "@VipDramlarBot"             # Bot username (@ siz)
 
 # JSONBin.io sozlamalari
 JSONBIN_API_KEY = "$2a$10$mQZC26SFNwuUJbIo3fANVO3eiIMW4jWdJTva4/6tBlESt4AAde.mi"
