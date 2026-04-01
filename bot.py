@@ -12,7 +12,7 @@ import sqlite3, logging, os, json
 from datetime import datetime, timedelta
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    ReplyKeyboardMarkup, KeyboardButton
+    ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -27,6 +27,9 @@ BOT_TOKEN    = os.environ.get("BOT_TOKEN", "")
 ADMIN_IDS    = [int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()]
 CHANNEL_ID   = os.environ.get("CHANNEL_ID", "")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "VipDramlarBot")
+# WebApp URL — webapp.html ni hosting ga joylang (GitHub Pages, Netlify, yoki Vercel)
+# Misol: https://yourdomain.github.io/kinobot/webapp.html
+WEBAPP_URL   = os.environ.get("WEBAPP_URL", "")
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -51,18 +54,18 @@ _COLOR_MAP = {
 
 def colored_btn(text, cbd=None, url=None, style=None):
     """Rangli inline tugma yasaydi (Telegram Bot API 7.3+)"""
-    kwargs = {"text": text}
+    # Style prefikslarini matn boshiga qo'shamiz (emojisiz, ko'rinadigan belgi)
+    _prefix = {"primary": "▶ ", "success": "✔ ", "danger": "✖ "}
+    display = _prefix.get(style, "") + text if style else text
+    kwargs = {"text": display}
     if cbd:
         kwargs["callback_data"] = cbd
     if url:
         kwargs["url"] = url
     btn = InlineKeyboardButton(**kwargs)
-    # Telegram yangi API: button color (pay, login va boshqalar uchun emas)
-    # python-telegram-bot kutubxonasi hali to'liq qo'llab-quvvatlamasa ham
-    # to'g'ridan-to'g'ri API parametrini qo'shamiz
+    # Telegram Bot API 7.3+: button color
     if style in _COLOR_MAP:
         try:
-            # Yangi PTB versiyalarida color parametri
             btn._unfreeze()
             btn.color = _COLOR_MAP[style]
         except Exception:
@@ -74,6 +77,10 @@ def ib_c(text, cbd, style=None):
 
 def lb_c(text, url, style=None):
     return colored_btn(text, url=url, style=style)
+
+# ib() — ib_c() uchun qisqacha alias (barcha joylarda ishlatiladi)
+def ib(text, cbd, style=None):
+    return ib_c(text, cbd, style=style)
 
 # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
 # DATABASE
@@ -291,19 +298,23 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     name = update.effective_user.first_name or "Foydalanuvchi"
+    # WebApp mavjud bo'lsa — rangli tugmali menyu
+    wkb = webapp_kb()
 
     if is_admin(uid):
+        kb = wkb if wkb else admin_kb()
         await update.message.reply_text(
             f"*Xush kelibsiz, {name}!*\n\n"
-            "Kino kodini yuboring yoki pastdagi tugmalardan foydalaning.",
-            reply_markup=admin_kb(),
+            "Kino kodini yuboring yoki menyudan foydalaning.",
+            reply_markup=kb,
             parse_mode=ParseMode.MARKDOWN
         )
     else:
+        kb = wkb if wkb else user_kb()
         await update.message.reply_text(
             f"*Xush kelibsiz, {name}!*\n\n"
-            "Kino kodini yuboring yoki pastdagi tugmalardan foydalaning.",
-            reply_markup=user_kb(),
+            "Kino kodini yuboring yoki menyudan foydalaning.",
+            reply_markup=kb,
             parse_mode=ParseMode.MARKDOWN
         )
 
@@ -396,11 +407,31 @@ async def cb_yuklab(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text("Qismlar hali qo'shilmagan.")
         return
 
+    # ── WebApp mavjud bo'lsa — rangli tugmali panel ──────────────
+    if WEBAPP_URL:
+        webapp_data = {
+            "kino_id": kino_id,
+            "nomi": kino["nomi"],
+            "qismlar": [
+                {"id": qs["id"], "raqam": qs["qism_raqam"],
+                 "is_vip": bool(qs["is_vip"]), "narx": qs["narx"]}
+                for qs in qismlar
+            ]
+        }
+        wkb = webapp_kb(extra_data=webapp_data)
+        await q.message.reply_text(
+            f"🎬 *{kino['nomi']}*\n\nQismni tanlang 👇",
+            reply_markup=wkb,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    # ── WebApp yo'q bo'lsa — oddiy inline tugmalar ───────────────
     btns = []
     row  = []
     for i, qism in enumerate(qismlar):
         if qism["is_vip"]:
-            label = f"\ud83d\udc51 {qism['qism_raqam']}-qism"
+            label = f"👑 {qism['qism_raqam']}-qism"
             btn   = ib_c(label, f"qism_{qism['id']}", style="danger")
         else:
             label = f"{qism['qism_raqam']}-qism"
@@ -411,7 +442,7 @@ async def cb_yuklab(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             row = []
 
     await q.message.reply_text(
-        f"\ud83c\udfac *{kino['nomi']}*\n\nQismni tanlang \ud83d\udc47",
+        f"🎬 *{kino['nomi']}*\n\nQismni tanlang 👇",
         reply_markup=InlineKeyboardMarkup(btns),
         parse_mode=ParseMode.MARKDOWN
     )
@@ -1461,10 +1492,87 @@ async def cb_kqism_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(q.from_user.id): return
     kino_id = int(q.data.split("_")[2])
     state_clear(q.from_user.id)
-    await q.message.reply_text(
-        "\u2705 Kino muvaffaqiyatli qo'shildi!",
-        reply_markup=admin_kb()
+
+    # DB dan kino va qismlarni olamiz
+    con = db()
+    kino    = con.execute("SELECT * FROM kinolar WHERE id=?", (kino_id,)).fetchone()
+    qismlar = con.execute(
+        "SELECT * FROM qismlar WHERE kino_id=? ORDER BY qism_raqam", (kino_id,)
+    ).fetchall()
+    con.close()
+
+    jami = len(qismlar)
+
+    # ── 1. Adminga natijani ko'rsatamiz (qismlar ro'yxati) ──────────────
+    qism_txt = "\n".join(
+        f"  {'👑' if q2['is_vip'] else '▶'} {q2['qism_raqam']}-qism"
+        + (f"  ({som(q2['narx'])} so'm)" if q2['is_vip'] else "")
+        for q2 in qismlar
     )
+    await q.message.reply_text(
+        f"✅ *{kino['nomi']}* muvaffaqiyatli qo'shildi!\n\n"
+        f"📋 Qo'shilgan qismlar ({jami} ta):\n{qism_txt or '—'}\n\n"
+        f"Kod: `{kino['kod']}`",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup([
+            [ib_c("📢 Kanalga post yuborish", f"autopost_{kino_id}", style="success")],
+            [ib_c("🔙 Admin panel",            "ap_back",             style="primary")],
+        ])
+    )
+
+async def cb_autopost(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Kino qo'shilgach kanalga avtomatik post yuboradi"""
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id): return
+
+    kino_id = int(q.data.split("_")[1])
+    con = db()
+    kino    = con.execute("SELECT * FROM kinolar WHERE id=?", (kino_id,)).fetchone()
+    qismlar = con.execute(
+        "SELECT * FROM qismlar WHERE kino_id=? ORDER BY qism_raqam", (kino_id,)
+    ).fetchall()
+    con.close()
+
+    if not kino:
+        await q.message.reply_text("Kino topilmadi!")
+        return
+
+    jami = len(qismlar)
+    caption = _post_caption(
+        kino["nomi"], jami, kino["til"], kino["kod"],
+        janr=kino["janr"], jami_qism=jami
+    )
+    kanal_btns = [[lb_c("▶ Tomosha qilish", f"https://t.me/{BOT_USERNAME}?start={kino['kod']}", style="primary")]]
+
+    try:
+        if kino["rasm_file_id"]:
+            await ctx.bot.send_photo(
+                CHANNEL_ID, kino["rasm_file_id"],
+                caption=caption,
+                reply_markup=InlineKeyboardMarkup(kanal_btns),
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            await ctx.bot.send_message(
+                CHANNEL_ID, caption,
+                reply_markup=InlineKeyboardMarkup(kanal_btns),
+                parse_mode=ParseMode.MARKDOWN
+            )
+        await q.message.reply_text(
+            f"✅ Post kanalga yuborildi!\n\n"
+            f"Kino: *{kino['nomi']}*\n"
+            f"Qismlar: {jami} ta",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=admin_kb()
+        )
+    except Exception as e:
+        await q.message.reply_text(
+            f"❌ Xato: {e}\n\nCHANNEL_ID: `{CHANNEL_ID}`\n"
+            f"Bot kanalga admin bo'lishi kerak!",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=admin_kb()
+        )
 
 async def cb_ktil(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -1514,7 +1622,7 @@ async def cb_kjanr(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data["qism_raqam"] = 1
     state_set(q.from_user.id, "k_qism", data)
     await q.message.reply_text(
-        f"\u2705 Kino saqlandi!\n\nEndi 1-qism videosini yuboring:"
+        f"✅ Kino saqlandi! (ID: {kino_id})\n\nEndi 1-qism videosini yuboring:"
     )
 
 async def cb_ptil(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1526,6 +1634,123 @@ async def cb_ptil(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data["til"] = til_map.get(q.data, "O'zbek tilida")
     state_set(q.from_user.id, "p_kod", data)
     await q.message.reply_text("5. Kino kodini kiriting (masalan: ACTION1):")
+
+# ══════════════════════════════════════════════════════════════════
+# WEBAPP KLAVIATURA — haqiqiy rangli tugmalar
+# ══════════════════════════════════════════════════════════════════
+def webapp_kb(extra_data=None):
+    """
+    ReplyKeyboard: bitta WebApp tugmasi.
+    WebApp ichida haqiqiy Ko'k/Yashil/Qizil tugmalar bo'ladi.
+    extra_data — kino qismlarini ko'rsatish uchun JSON data.
+    """
+    if not WEBAPP_URL:
+        return None
+    url = WEBAPP_URL
+    if extra_data:
+        import urllib.parse
+        url = WEBAPP_URL + "?data=" + urllib.parse.quote(json.dumps(extra_data, ensure_ascii=False))
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("🎬 Menyuni ochish", web_app=WebAppInfo(url=url))]],
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+
+async def on_webapp_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """WebApp dan kelgan tugma bosilishini qayta ishlaydi"""
+    ensure_user(update.effective_user)
+    uid  = update.effective_user.id
+    raw  = update.effective_message.web_app_data.data
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return
+
+    action = data.get("action", "")
+
+    if action == "elon_berish":
+        if is_admin(uid):
+            state_set(uid, "p_rasm", {})
+            await update.message.reply_text("*Kanal Post*\n\n1. Kino rasmini yuboring:",
+                                            parse_mode=ParseMode.MARKDOWN)
+        else:
+            await update.message.reply_text("Bu funksiya faqat adminlar uchun!")
+
+    elif action == "yordam":
+        await update.message.reply_text(
+            "*Yordam*\n\n"
+            "Kino kodini yuboring va filmni ko'ring.\n"
+            "Savol uchun: @" + BOT_USERNAME,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    elif action == "hisobim":
+        await show_hisobim(update, ctx)
+
+    elif action == "vip_tariflar":
+        await show_vip(update, ctx)
+
+    elif action == "qidirish":
+        await update.message.reply_text("Kino kodini kiriting (masalan: ACTION1):")
+
+    elif action == "telegram_premium":
+        await update.message.reply_text(
+            "*Telegram Premium*\n\n"
+            "Premium sotib olish uchun admin bilan bog'laning:\n@" + BOT_USERNAME,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    elif action == "stars_olish":
+        await update.message.reply_text(
+            "*Telegram Stars*\n\n"
+            "Stars sotib olish uchun admin bilan bog'laning:\n@" + BOT_USERNAME,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    elif action == "kino_janr":
+        janr = data.get("janr", "")
+        con = db()
+        kinolar = con.execute(
+            "SELECT * FROM kinolar WHERE janr LIKE ? LIMIT 10", (f"%{janr}%",)
+        ).fetchall()
+        con.close()
+        if not kinolar:
+            await update.message.reply_text("Bu janrda kino topilmadi.")
+            return
+        btns = []
+        for k in kinolar:
+            btns.append([ib_c(k["nomi"], f"yuklab_{k['id']}", style="primary")])
+        await update.message.reply_text(
+            f"*{janr.title()} kinolar:*",
+            reply_markup=InlineKeyboardMarkup(btns),
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    elif action == "qism_tanlandi":
+        # WebApp dan qism tanlandi — xuddi cb_qism kabi ishlaymiz
+        class FakeQuery:
+            def __init__(self, data, from_user, message):
+                self.data = data
+                self.from_user = from_user
+                self.message = message
+            async def answer(self): pass
+
+        class FakeUpdate:
+            def __init__(self, query):
+                self.callback_query = query
+                self.effective_user = query.from_user
+                self.effective_message = query.message
+
+        qism_id = data.get("qism_id")
+        if qism_id:
+            fake_q = FakeQuery(
+                f"qism_{qism_id}",
+                update.effective_user,
+                update.message
+            )
+            fake_upd = FakeUpdate(fake_q)
+            await cb_qism(fake_upd, ctx)
+
 
 # ══════════════════════════════════════════════════════════════════
 # MAIN
@@ -1561,9 +1786,13 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_mdel,         pattern=r"^mdel_"))
     app.add_handler(CallbackQueryHandler(cb_xabar_target, pattern=r"^x(all|vip|free)$"))
     app.add_handler(CallbackQueryHandler(cb_kqism_done,   pattern=r"^kqism_done_"))
-    app.add_handler(CallbackQueryHandler(cb_ktil,         pattern=r"^ktil_"))
+    app.add_handler(CallbackQueryHandler(cb_autopost,      pattern=r"^autopost_"))
+    app.add_handler(CallbackQueryHandler(cb_ktil,          pattern=r"^ktil_"))
     app.add_handler(CallbackQueryHandler(cb_kjanr,        pattern=r"^kjanr_"))
     app.add_handler(CallbackQueryHandler(cb_ptil,         pattern=r"^ptil_"))
+
+    # WebApp data handler
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, on_webapp_data))
 
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND, on_text
