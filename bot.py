@@ -320,14 +320,14 @@ async def show_kino(update, ctx, kino):
     jami  = len(qismlar)
 
     # Image 2 formatida caption
-    til_nomi = kino['til'] or "O'zbek tilida"
-    janr_nomi = kino['janr'] or 'Mini drama'
+    _til  = kino['til']  or "O'zbek tilida"
+    _janr = kino['janr'] or 'Mini drama'
     caption = (
         f"\ud83c\udfac *{kino['nomi']}*\n"
         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
         f"  Qism       :  {joriy}/{jami}\n"
-        f"  Janrlari   :  {janr_nomi}\n"
-        f"  Tili       :  {til_nomi}\n"
+        f"  Janrlari   :  {_janr}\n"
+        f"  Tili       :  {_til}\n"
         f"  Ko'rish    :  \ud83c\udf7f @{BOT_USERNAME}\n"
         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
     )
@@ -1374,4 +1374,165 @@ async def admin_state_media(update, ctx, state, data):
         data["rasm"] = rasm
         state_set(uid, "k_kod", data)
         await msg.reply_text(
-            "3
+            "3. Kino kodini kiriting (masalan: ACTION1):"
+        )
+        return True
+
+    if state == "k_qism":
+        if not msg.video:
+            await msg.reply_text("Video yuboring!")
+            return True
+        file_id = msg.video.file_id
+        kino_id = data.get("kino_id")
+        qism_raqam = data.get("qism_raqam", 1)
+        con = db()
+        con.execute(
+            "INSERT INTO qismlar(kino_id, qism_raqam, file_id) VALUES(?,?,?)",
+            (kino_id, qism_raqam, file_id)
+        )
+        con.commit(); con.close()
+        data["qism_raqam"] = qism_raqam + 1
+        state_set(uid, "k_qism", data)
+        btns = [
+            [ib(f"\u2705 Tugallash ({qism_raqam}-qism saqlandi)", f"kqism_done_{kino_id}", style="success")],
+        ]
+        await msg.reply_text(
+            f"\u2705 {qism_raqam}-qism saqlandi!\n\nKeyingi qismni yuboring yoki tugallang:",
+            reply_markup=InlineKeyboardMarkup(btns)
+        )
+        return True
+
+    if state == "p_rasm":
+        rasm = msg.photo[-1].file_id if msg.photo else None
+        if not rasm:
+            await msg.reply_text("Rasm yuboring!")
+            return True
+        data["rasm"] = rasm
+        state_set(uid, "p_nomi", data)
+        await msg.reply_text("2. Kino nomini kiriting:")
+        return True
+
+    return False
+
+async def cb_kqism_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id): return
+    kino_id = int(q.data.split("_")[2])
+    state_clear(q.from_user.id)
+    await q.message.reply_text(
+        "\u2705 Kino muvaffaqiyatli qo'shildi!",
+        reply_markup=admin_kb()
+    )
+
+async def cb_ktil(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id): return
+    _, data = state_get(q.from_user.id)
+    til_map = {"ktil_uz": "O'zbek tilida", "ktil_ru": "Rus tilida", "ktil_en": "Ingliz tilida"}
+    data["til"] = til_map.get(q.data, "O'zbek tilida")
+    state_set(q.from_user.id, "k_janr", data)
+    btns = [
+        [ib("Mini drama",  "kjanr_minidrama",  style="primary")],
+        [ib("Melodrama",   "kjanr_melodrama",  style="primary")],
+        [ib("Romantik",    "kjanr_romantik",   style="primary")],
+        [ib("Komediya",    "kjanr_komediya",   style="primary")],
+    ]
+    await q.message.reply_text("6. Janrni tanlang:", reply_markup=InlineKeyboardMarkup(btns))
+
+async def cb_kjanr(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id): return
+    _, data = state_get(q.from_user.id)
+    janr_map = {
+        "kjanr_minidrama": "Mini drama",
+        "kjanr_melodrama": "Melodrama",
+        "kjanr_romantik":  "Romantik",
+        "kjanr_komediya":  "Komediya",
+    }
+    janr = janr_map.get(q.data, "Mini drama")
+    # Save kino to DB
+    con = db()
+    con.execute(
+        "INSERT INTO kinolar(nomi, kod, rasm_file_id, til, janr, davlat, yil) VALUES(?,?,?,?,?,?,?)",
+        (
+            data.get("nomi"),
+            data.get("kod"),
+            data.get("rasm"),
+            data.get("til", "O'zbek tilida"),
+            janr,
+            data.get("davlat", "Xitoy"),
+            data.get("yil", datetime.now().year),
+        )
+    )
+    kino_id = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+    con.commit(); con.close()
+    data["kino_id"] = kino_id
+    data["qism_raqam"] = 1
+    state_set(q.from_user.id, "k_qism", data)
+    await q.message.reply_text(
+        f"\u2705 Kino saqlandi!\n\nEndi 1-qism videosini yuboring:"
+    )
+
+async def cb_ptil(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id): return
+    _, data = state_get(q.from_user.id)
+    til_map = {"ptil_uz": "O'zbek tilida", "ptil_ru": "Rus tilida"}
+    data["til"] = til_map.get(q.data, "O'zbek tilida")
+    state_set(q.from_user.id, "p_kod", data)
+    await q.message.reply_text("5. Kino kodini kiriting (masalan: ACTION1):")
+
+# ══════════════════════════════════════════════════════════════════
+# MAIN
+# ══════════════════════════════════════════════════════════════════
+def main():
+    db_init()
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("admin", cmd_admin))
+
+    app.add_handler(CallbackQueryHandler(cb_yuklab,       pattern=r"^yuklab_"))
+    app.add_handler(CallbackQueryHandler(cb_qism,         pattern=r"^qism_"))
+    app.add_handler(CallbackQueryHandler(cb_balans,       pattern=r"^balans_"))
+    app.add_handler(CallbackQueryHandler(cb_hisobim,      pattern=r"^hisobim$"))
+    app.add_handler(CallbackQueryHandler(cb_toldirish,    pattern=r"^toldirish$"))
+    app.add_handler(CallbackQueryHandler(cb_vip_menu,     pattern=r"^vip_menu$"))
+    app.add_handler(CallbackQueryHandler(cb_vipbuy,       pattern=r"^vipbuy_"))
+    app.add_handler(CallbackQueryHandler(cb_check_sub,    pattern=r"^check_sub$"))
+    app.add_handler(CallbackQueryHandler(cb_tok,          pattern=r"^tok_"))
+    app.add_handler(CallbackQueryHandler(cb_tno,          pattern=r"^tno_"))
+    app.add_handler(CallbackQueryHandler(cb_vok,          pattern=r"^vok_"))
+    app.add_handler(CallbackQueryHandler(cb_vno,          pattern=r"^vno_"))
+    app.add_handler(CallbackQueryHandler(cb_xyu,          pattern=r"^xyu_"))
+    app.add_handler(CallbackQueryHandler(cb_postsend,     pattern=r"^postsend_"))
+    app.add_handler(CallbackQueryHandler(cb_ap_back,      pattern=r"^ap_back$"))
+    app.add_handler(CallbackQueryHandler(cb_tadd,         pattern=r"^tadd$"))
+    app.add_handler(CallbackQueryHandler(cb_tdel,         pattern=r"^tdel_"))
+    app.add_handler(CallbackQueryHandler(cb_kadd,         pattern=r"^kadd$"))
+    app.add_handler(CallbackQueryHandler(cb_kdel,         pattern=r"^kdel_"))
+    app.add_handler(CallbackQueryHandler(cb_madd,         pattern=r"^madd$"))
+    app.add_handler(CallbackQueryHandler(cb_mtur,         pattern=r"^mtur_"))
+    app.add_handler(CallbackQueryHandler(cb_mdel,         pattern=r"^mdel_"))
+    app.add_handler(CallbackQueryHandler(cb_xabar_target, pattern=r"^x(all|vip|free)$"))
+    app.add_handler(CallbackQueryHandler(cb_kqism_done,   pattern=r"^kqism_done_"))
+    app.add_handler(CallbackQueryHandler(cb_ktil,         pattern=r"^ktil_"))
+    app.add_handler(CallbackQueryHandler(cb_kjanr,        pattern=r"^kjanr_"))
+    app.add_handler(CallbackQueryHandler(cb_ptil,         pattern=r"^ptil_"))
+
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND, on_text
+    ))
+    app.add_handler(MessageHandler(
+        (filters.PHOTO | filters.VIDEO | filters.VOICE) & ~filters.COMMAND, on_media
+    ))
+
+    log.info("Bot ishga tushdi...")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
