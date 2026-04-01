@@ -1,340 +1,178 @@
-import os
 import logging
-import asyncio
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    InputMediaVideo, BotCommand
-)
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
-)
-from telegram.constants import ParseMode
-import json
+import sqlite3
+from aiogram import Bot, Dispatcher, executor, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ===================== CONFIG =====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "123456789").split(",")]
-CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME", "@UzDubGo_Drama")  # Kanal username
+# --- SOZLAMALAR ---
+API_TOKEN = 'BOT_TOKENINGIZNI_SHU_YERGA_YOZING'
+ADMIN_ID = 12345678  # O'zingizning Telegram ID-ingizni yozing
 
-# ===================== LOGGING =====================
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# Loglarni sozlash
+logging.basicConfig(level=logging.INFO)
 
-# ===================== IN-MEMORY DATABASE =====================
-# { drama_name: { "episodes": { ep_num: file_id }, "info": {...} } }
-dramas_db = {}
+# Bot va Dispatcher
+bot = Bot(token=API_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
 
-# ===================== HELPERS =====================
+# --- MA'LUMOTLAR BAZASI ---
+conn = sqlite3.connect('dorama_bot.db', check_same_thread=False)
+cursor = conn.cursor()
 
-def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+cursor.execute('''CREATE TABLE IF NOT EXISTS movies 
+                (id INTEGER PRIMARY KEY, code TEXT, name TEXT, photo TEXT, lang TEXT, parts INTEGER)''')
+cursor.execute('''CREATE TABLE IF NOT EXISTS videos 
+                (movie_id INTEGER, part_num INTEGER, file_id TEXT)''')
+conn.commit()
 
-def drama_list_keyboard():
-    buttons = []
-    for name in dramas_db.keys():
-        buttons.append([InlineKeyboardButton(f"🎬 {name}", callback_data=f"drama_{name}")])
-    if not buttons:
-        return None
-    return InlineKeyboardMarkup(buttons)
+# --- STATES (HOLATLAR) ---
+class AddMovie(StatesGroup):
+    code = State()
+    name = State()
+    photo = State()
+    lang = State()
+    parts_count = State()
+    uploading_videos = State()
 
-def episodes_keyboard(drama_name: str):
-    drama = dramas_db.get(drama_name)
-    if not drama:
-        return None
-    episodes = sorted(drama["episodes"].keys())
-    buttons = []
-    row = []
-    for ep in episodes:
-        row.append(InlineKeyboardButton(f"{ep}-qism", callback_data=f"ep_{drama_name}_{ep}"))
-        if len(row) == 5:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
-    buttons.append([InlineKeyboardButton("⬅️ Orqaga", callback_data="back_to_list")])
-    return InlineKeyboardMarkup(buttons)
+# --- ADMIN PANEL ---
+@dp.message_handler(commands=['admin'], user_id=ADMIN_ID)
+async def admin_start(message: types.Message):
+    await message.answer("Xush kelibsiz Admin! Yangi kino qo'shish uchun /add buyrug'ini bering.")
 
-# ===================== PROTECTION MESSAGE =====================
-PROTECTION_TEXT = """
-⚠️ <b>Diqqat!</b>
+@dp.message_handler(commands=['add'], user_id=ADMIN_ID)
+async def start_add(message: types.Message):
+    await AddMovie.code.set()
+    await message.answer("Kino uchun maxsus kodni kiriting:")
 
-Bu video faqat botda ko'rish uchun.
-❌ Yuklab olish mumkin emas
-❌ Ekran yozuv qilish taqiqlangan
-❌ Screenshot olish taqiqlangan
+@dp.message_handler(state=AddMovie.code)
+async def set_code(message: types.Message, state: FSMContext):
+    await state.update_data(code=message.text)
+    await AddMovie.name.set()
+    await message.answer("Kino nomini kiriting:")
 
-📌 Bu video faqat shu botda mavjud.
-"""
+@dp.message_handler(state=AddMovie.name)
+async def set_name(message: types.Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await AddMovie.photo.set()
+    await message.answer("Kino uchun rasm (poster) yuboring:")
 
-# ===================== COMMANDS =====================
+@dp.message_handler(content_types=['photo'], state=AddMovie.photo)
+async def set_photo(message: types.Message, state: FSMContext):
+    photo_id = message.photo[-1].file_id
+    await state.update_data(photo=photo_id)
+    await AddMovie.lang.set()
+    await message.answer("Kino tilini kiriting (masalan: O'zbek tili):")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    text = (
-        f"👋 Salom, <b>{user.first_name}</b>!\n\n"
-        f"🎬 <b>UzDubGo Drama Bot</b>ga xush kelibsiz!\n\n"
-        f"Bu botda O'zbek tilida dublyaj qilingan dramalarni tomosha qilishingiz mumkin.\n\n"
-        f"⚠️ <i>Videolar faqat botda ko'rish uchun. Yuklab olish, ekran yozuv va screenshot taqiqlangan.</i>\n\n"
-        f"👇 Quyidagi tugmani bosing:"
-    )
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎬 Dramalar ro'yxati", callback_data="list_dramas")],
-        [InlineKeyboardButton("📢 Asosiy kanal", url=f"https://t.me/{CHANNEL_USERNAME.lstrip('@')}")]
-    ])
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+@dp.message_handler(state=AddMovie.lang)
+async def set_lang(message: types.Message, state: FSMContext):
+    await state.update_data(lang=message.text)
+    await AddMovie.parts_count.set()
+    await message.answer("Kino necha qismdan iborat? (son kiriting):")
 
+@dp.message_handler(state=AddMovie.parts_count)
+async def set_parts(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        return await message.answer("Iltimos faqat son kiriting!")
+    
+    parts = int(message.text)
+    data = await state.get_data()
+    
+    cursor.execute("INSERT INTO movies (code, name, photo, lang, parts) VALUES (?, ?, ?, ?, ?)",
+                   (data['code'], data['name'], data['photo'], data['lang'], parts))
+    movie_id = cursor.lastrowid
+    conn.commit()
+    
+    await state.update_data(movie_id=movie_id, current_part=1, total_parts=parts)
+    await AddMovie.uploading_videos.set()
+    await message.answer(f"1-qism videosini yuboring:")
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Sizda ruxsat yo'q.")
-        return
-    text = (
-        "🛠 <b>Admin buyruqlari:</b>\n\n"
-        "/add_drama <code>DramaNomi | Davlat | Yil | Janr | Qismlar soni</code>\n"
-        "  ➕ Yangi drama qo'shish\n\n"
-        "/add_ep <code>DramaNomi | QismSoni</code>\n"
-        "  ➕ Keyin video yuboring\n\n"
-        "/list_dramas\n"
-        "  📋 Barcha dramalar ro'yxati\n\n"
-        "/del_drama <code>DramaNomi</code>\n"
-        "  🗑 Dramani o'chirish\n\n"
-        "/stats\n"
-        "  📊 Statistika"
-    )
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-
-
-async def admin_add_drama(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Ruxsat yo'q.")
-        return
-    try:
-        args = " ".join(context.args).split("|")
-        name = args[0].strip()
-        country = args[1].strip()
-        year = args[2].strip()
-        genre = args[3].strip()
-        total = args[4].strip()
-        dramas_db[name] = {
-            "episodes": {},
-            "info": {
-                "name": name,
-                "country": country,
-                "year": year,
-                "genre": genre,
-                "total": total
-            }
-        }
-        await update.message.reply_text(
-            f"✅ <b>{name}</b> drama qo'shildi!\n"
-            f"📊 Jami qismlar: {total}",
-            parse_mode=ParseMode.HTML
-        )
-    except Exception:
-        await update.message.reply_text(
-            "❌ Format:\n/add_drama DramaNomi | Davlat | Yil | Janr | QismlarSoni"
-        )
-
-
-# State: waiting for video upload
-pending_episode = {}  # admin_id: (drama_name, ep_num)
-
-async def admin_add_episode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Ruxsat yo'q.")
-        return
-    try:
-        args = " ".join(context.args).split("|")
-        drama_name = args[0].strip()
-        ep_num = int(args[1].strip())
-        if drama_name not in dramas_db:
-            await update.message.reply_text(f"❌ '{drama_name}' topilmadi.")
-            return
-        pending_episode[update.effective_user.id] = (drama_name, ep_num)
-        await update.message.reply_text(
-            f"✅ Endi <b>{drama_name}</b> - {ep_num}-qism videosini yuboring:",
-            parse_mode=ParseMode.HTML
-        )
-    except Exception:
-        await update.message.reply_text("❌ Format:\n/add_ep DramaNomi | QismSoni")
-
-
-async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not is_admin(user_id):
-        return
-    if user_id not in pending_episode:
-        return
-    video = update.message.video or update.message.document
-    if not video:
-        await update.message.reply_text("❌ Iltimos video yuboring.")
-        return
-    drama_name, ep_num = pending_episode.pop(user_id)
-    file_id = video.file_id
-    dramas_db[drama_name]["episodes"][ep_num] = file_id
-    await update.message.reply_text(
-        f"✅ <b>{drama_name}</b> - {ep_num}-qism saqlandi!",
-        parse_mode=ParseMode.HTML
-    )
-
-
-async def admin_list_dramas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Ruxsat yo'q.")
-        return
-    if not dramas_db:
-        await update.message.reply_text("📭 Hech qanday drama yo'q.")
-        return
-    text = "📋 <b>Barcha dramalar:</b>\n\n"
-    for name, data in dramas_db.items():
-        ep_count = len(data["episodes"])
-        total = data["info"].get("total", "?")
-        text += f"🎬 <b>{name}</b> - {ep_count}/{total} qism\n"
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-
-
-async def admin_del_drama(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Ruxsat yo'q.")
-        return
-    name = " ".join(context.args).strip()
-    if name in dramas_db:
-        del dramas_db[name]
-        await update.message.reply_text(f"🗑 <b>{name}</b> o'chirildi.", parse_mode=ParseMode.HTML)
+@dp.message_handler(content_types=['video'], state=AddMovie.uploading_videos)
+async def upload_videos(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    m_id = data['movie_id']
+    curr = data['current_part']
+    total = data['total_parts']
+    
+    cursor.execute("INSERT INTO videos (movie_id, part_num, file_id) VALUES (?, ?, ?)",
+                   (m_id, curr, message.video.file_id))
+    conn.commit()
+    
+    if curr < total:
+        new_part = curr + 1
+        await state.update_data(current_part=new_part)
+        await message.answer(f"{new_part}-qism videosini yuboring:")
     else:
-        await update.message.reply_text(f"❌ '{name}' topilmadi.")
+        await state.finish()
+        await message.answer("Kino va barcha qismlar muvaffaqiyatli saqlandi! ✅")
 
+# --- FOYDALANUVCHI QISMI ---
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Ruxsat yo'q.")
-        return
-    total_dramas = len(dramas_db)
-    total_eps = sum(len(d["episodes"]) for d in dramas_db.values())
-    await update.message.reply_text(
-        f"📊 <b>Statistika:</b>\n\n"
-        f"🎬 Jami drama: {total_dramas}\n"
-        f"📺 Jami qism: {total_eps}",
-        parse_mode=ParseMode.HTML
-    )
+@dp.message_handler(commands=['start'])
+async def cmd_start(message: types.Message):
+    args = message.get_args()
+    if args:
+        # Agar start bilan kod kelsa (masalan: t.me/bot?start=kod)
+        await process_code(message, args)
+    else:
+        await message.answer("Assalomu alaykum! Kino ko'rish uchun kodni yuboring.")
 
-# ===================== CALLBACKS =====================
+@dp.message_handler()
+async def check_code(message: types.Message):
+    await process_code(message, message.text)
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data == "list_dramas" or data == "back_to_list":
-        kb = drama_list_keyboard()
-        if not kb:
-            await query.edit_message_text("📭 Hozircha drama yo'q. Tez orada qo'shiladi!")
-            return
-        await query.edit_message_text(
-            "🎬 <b>Dramalar ro'yxati:</b>\n\nKo'rmoqchi bo'lgan dramangiazni tanlang:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb
+async def process_code(message, code):
+    cursor.execute("SELECT * FROM movies WHERE code=?", (code,))
+    movie = cursor.fetchone()
+    
+    if movie:
+        m_id, m_code, m_name, m_photo, m_lang, m_parts = movie
+        
+        text = (f"🎬 **Nomi:** {m_name}\n"
+                f"🌍 **Davlat:** Xitoy\n"
+                f"🇺🇿 **Tili:** {m_lang}\n"
+                f"🎞 **Qismlar soni:** {m_parts}\n"
+                f"🎭 **Janri:** Mini drama")
+        
+        keyboard = InlineKeyboardMarkup(row_width=2)
+        # Qismlarni tanlash tugmalari
+        buttons = []
+        for i in range(1, m_parts + 1):
+            buttons.append(InlineKeyboardButton(f"{i}-qism", callback_data=f"part_{m_id}_{i}"))
+        keyboard.add(*buttons)
+        
+        # protect_content=True - Forward qilish va saqlashni taqiqlaydi
+        await bot.send_photo(
+            chat_id=message.chat.id,
+            photo=m_photo,
+            caption=text,
+            reply_markup=keyboard,
+            protect_content=True 
         )
+    else:
+        await message.answer("Xato kod kiritdingiz yoki bunday kino mavjud emas. ❌")
 
-    elif data.startswith("drama_"):
-        drama_name = data[len("drama_"):]
-        drama = dramas_db.get(drama_name)
-        if not drama:
-            await query.edit_message_text("❌ Drama topilmadi.")
-            return
-        info = drama["info"]
-        ep_count = len(drama["episodes"])
-        text = (
-            f"🎬 <b>{info['name']}</b>\n\n"
-            f"🌍 Davlat: {info.get('country', '?')}\n"
-            f"📅 Yil: {info.get('year', '?')}\n"
-            f"🎭 Janr: {info.get('genre', '?')}\n"
-            f"📺 Qismlar: {ep_count}/{info.get('total', '?')}\n"
-            f"🌐 Tili: O'zbek tilida\n\n"
-            f"👇 Qismni tanlang:"
+@dp.callback_query_handler(lambda c: c.data.startswith('part_'))
+async def show_part(callback_query: types.CallbackQuery):
+    _, m_id, part_num = callback_query.data.split('_')
+    
+    cursor.execute("SELECT file_id FROM videos WHERE movie_id=? AND part_num=?", (m_id, part_num))
+    video = cursor.fetchone()
+    
+    if video:
+        # MUHIM: protect_content=True videoni yuklab olishni va forwardni yopadi
+        # Bu funksiya Telegramning o'zida skrinshot va zapisni ham cheklaydi (Android/iOS)
+        await bot.send_video(
+            chat_id=callback_query.from_user.id,
+            video=video[0],
+            caption=f"🎬 {part_num}-qism\n\nMarhamat, tomosha qiling!",
+            protect_content=True
         )
-        kb = episodes_keyboard(drama_name)
-        if not kb:
-            await query.edit_message_text("❌ Qismlar hali yuklanmagan.")
-            return
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        await callback_query.answer()
+    else:
+        await callback_query.answer("Video topilmadi.", show_alert=True)
 
-    elif data.startswith("ep_"):
-        parts = data[3:].rsplit("_", 1)
-        drama_name = parts[0]
-        ep_num = int(parts[1])
-        drama = dramas_db.get(drama_name)
-        if not drama:
-            await query.edit_message_text("❌ Drama topilmadi.")
-            return
-        file_id = drama["episodes"].get(ep_num)
-        if not file_id:
-            await query.edit_message_text("❌ Bu qism hali yuklanmagan.")
-            return
-
-        # Send protection warning first
-        await query.message.reply_text(PROTECTION_TEXT, parse_mode=ParseMode.HTML)
-
-        # Send video - NO caption with download link, streaming only
-        caption = (
-            f"🎬 <b>{drama_name}</b>\n"
-            f"📺 {ep_num}-qism\n\n"
-            f"⚠️ Yuklab olish, ekran yozuv va screenshot taqiqlangan!\n"
-            f"📢 {CHANNEL_USERNAME}"
-        )
-        await query.message.reply_video(
-            video=file_id,
-            caption=caption,
-            parse_mode=ParseMode.HTML,
-            # protect_content=True disables forwarding and saving
-            protect_content=True,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Orqaga", callback_data=f"drama_{drama_name}")]
-            ])
-        )
-
-
-# ===================== MAIN =====================
-
-async def post_init(application: Application):
-    await application.bot.set_my_commands([
-        BotCommand("start", "Botni boshlash"),
-        BotCommand("help", "Admin yordam"),
-        BotCommand("add_drama", "Drama qo'shish (Admin)"),
-        BotCommand("add_ep", "Qism qo'shish (Admin)"),
-        BotCommand("list_dramas", "Dramalar ro'yxati (Admin)"),
-        BotCommand("del_drama", "Drama o'chirish (Admin)"),
-        BotCommand("stats", "Statistika (Admin)"),
-    ])
-
-
-def main():
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
-
-    # User commands
-    app.add_handler(CommandHandler("start", start))
-
-    # Admin commands
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("add_drama", admin_add_drama))
-    app.add_handler(CommandHandler("add_ep", admin_add_episode))
-    app.add_handler(CommandHandler("list_dramas", admin_list_dramas))
-    app.add_handler(CommandHandler("del_drama", admin_del_drama))
-    app.add_handler(CommandHandler("stats", stats))
-
-    # Video upload handler (admin only)
-    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, receive_video))
-
-    # Button callbacks
-    app.add_handler(CallbackQueryHandler(button_handler))
-
-    logger.info("Bot ishga tushdi...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    executor.start_polling(dp, skip_updates=True)
