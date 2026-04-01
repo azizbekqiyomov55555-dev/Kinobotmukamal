@@ -21,9 +21,9 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # ─── SOZLAMALAR ──────────────────────────────────────────────────────────────
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-ADMIN_IDS = [123456789]  # Admin Telegram ID larini qo'shing
-CHANNEL_ID = "@your_channel"  # Kanal username
+BOT_TOKEN = "8693668045:AAGY-fCRkzaDNO9xHqJAFcrpI_OLpYIBMdI"
+ADMIN_IDS = [8537782289]  # Admin Telegram ID larini qo'shing
+CHANNEL_ID = "@Azizbekl2026"  # Kanal username
 
 # ─── RANGLAR (InlineKeyboard uchun) ──────────────────────────────────────────
 # Telegram 3 xil rang qo'llab-quvvatlaydi:
