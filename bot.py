@@ -37,15 +37,15 @@ log = logging.getLogger(__name__)
 # style="success" \u2192 Yashil
 # style="danger"  \u2192 Qizil
 # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+_STYLE_EMOJI = {"primary": "🔵", "success": "🟢", "danger": "🔴"}
+
 def ib(text, cbd, style=None):
-    if style:
-        return InlineKeyboardButton(text, callback_data=cbd, style=style)
-    return InlineKeyboardButton(text, callback_data=cbd)
+    label = f"{_STYLE_EMOJI[style]} {text}" if style in _STYLE_EMOJI else text
+    return InlineKeyboardButton(label, callback_data=cbd)
 
 def lb(text, url, style=None):
-    if style:
-        return InlineKeyboardButton(text, url=url, style=style)
-    return InlineKeyboardButton(text, url=url)
+    label = f"{_STYLE_EMOJI[style]} {text}" if style in _STYLE_EMOJI else text
+    return InlineKeyboardButton(label, url=url)
 
 # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
 # DATABASE
