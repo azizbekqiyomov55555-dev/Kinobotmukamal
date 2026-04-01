@@ -20,32 +20,69 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-# ─── SOZLAMALAR ──────────────────────────────────────────────────────────────
-BOT_TOKEN = "8693668045:AAGY-fCRkzaDNO9xHqJAFcrpI_OLpYIBMdI"
-ADMIN_IDS = [8537782289]  # Admin Telegram ID larini qo'shing
-CHANNEL_ID = "@Azizbekl2026"  # Kanal username
+# ─── SOZLAMALAR (Railway Environment Variables) ──────────────────────────────
+BOT_TOKEN    = os.environ.get("BOT_TOKEN", "")
+ADMIN_IDS    = [int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()]
+CHANNEL_ID   = os.environ.get("CHANNEL_ID", "")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "your_bot")
 
-# ─── RANGLAR (InlineKeyboard uchun) ──────────────────────────────────────────
-# Telegram 3 xil rang qo'llab-quvvatlaydi:
-# "" - oddiy (kulrang)  |  "✅" prefix - yashil  |  "🔴" prefix - qizil
-# Haqiqiy rang uchun InlineKeyboardButton(text, callback_data, ...) yetarli
-# Telegram Bot API 7.0+ da "pay" tugmasi yashil, "url" tugmasi ko'k bo'ladi
+# ─── RANGLI TUGMA YORDAMCHILARI (Bot API 9.4 — style maydoni) ────────────────
+# 3 xil rang: success=yashil  |  primary=ko'k  |  danger=qizil
+# python-telegram-bot 20.x hali style ni qo'llamaydi → api_kwargs orqali
+
+def btn_green(text, cbd):
+    return InlineKeyboardButton(text, callback_data=cbd, api_kwargs={"style": "success"})
+
+def btn_red(text, cbd):
+    return InlineKeyboardButton(text, callback_data=cbd, api_kwargs={"style": "danger"})
+
+def btn_blue(text, cbd):
+    return InlineKeyboardButton(text, callback_data=cbd, api_kwargs={"style": "primary"})
+
+def btn_url(text, url):
+    return InlineKeyboardButton(text, url=url)
 
 # ─── HOLAT KONSTANTLARI ──────────────────────────────────────────────────────
-(
-    # Admin panel holatlari
-    AP_MAIN, AP_KINO_ADD, AP_KINO_NOMI, AP_KINO_RASM, AP_KINO_KOD,
-    AP_KINO_TIL, AP_KINO_JANR, AP_KINO_QISM_ADD, AP_KINO_QISM_FILE,
-    AP_KINO_QISM_YANA, AP_KINO_VIP, AP_KINO_VIP_QISM, AP_KINO_VIP_NARX,
-    AP_KANAL_POST, AP_KANAL_RASM, AP_KANAL_NOMI, AP_KANAL_QISM, AP_KANAL_TIL,
-    AP_KANAL_KO, AP_KANAL_TASDIQLASH,
-    AP_TARIF_ADD, AP_TARIF_NOMI, AP_TARIF_NARX, AP_TARIF_KUN,
-    AP_KARTA_ADD, AP_MAJBURIY_ADD, AP_MAJBURIY_TUR, AP_MAJBURIY_LINK,
-    AP_TOLOV_TASDIQLASH, AP_XABAR_YUBORISH, AP_XABAR_MATN,
-    # Foydalanuvchi holatlari
-    U_MAIN, U_KOD_IZLASH, U_TOLOV_MIQDOR, U_TOLOV_CHEK,
-    U_TOLOV_BALANS, U_VIP_TOLOV, U_VIP_CHEK,
-) = range(42)
+# Admin panel holatlari
+AP_MAIN = 0
+AP_KINO_ADD = 1
+AP_KINO_NOMI = 2
+AP_KINO_RASM = 3
+AP_KINO_KOD = 4
+AP_KINO_TIL = 5
+AP_KINO_JANR = 6
+AP_KINO_QISM_ADD = 7
+AP_KINO_QISM_FILE = 8
+AP_KINO_QISM_YANA = 9
+AP_KINO_VIP = 10
+AP_KINO_VIP_QISM = 11
+AP_KINO_VIP_NARX = 12
+AP_KANAL_POST = 13
+AP_KANAL_RASM = 14
+AP_KANAL_NOMI = 15
+AP_KANAL_QISM = 16
+AP_KANAL_TIL = 17
+AP_KANAL_KO = 18
+AP_KANAL_TASDIQLASH = 19
+AP_TARIF_ADD = 20
+AP_TARIF_NOMI = 21
+AP_TARIF_NARX = 22
+AP_TARIF_KUN = 23
+AP_KARTA_ADD = 24
+AP_MAJBURIY_ADD = 25
+AP_MAJBURIY_TUR = 26
+AP_MAJBURIY_LINK = 27
+AP_TOLOV_TASDIQLASH = 28
+AP_XABAR_YUBORISH = 29
+AP_XABAR_MATN = 30
+# Foydalanuvchi holatlari
+U_MAIN = 31
+U_KOD_IZLASH = 32
+U_TOLOV_MIQDOR = 33
+U_TOLOV_CHEK = 34
+U_TOLOV_BALANS = 35
+U_VIP_TOLOV = 36
+U_VIP_CHEK = 37
 
 # ─── LOGGING ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -202,7 +239,7 @@ async def send_subscription_msg(update, not_subscribed):
         buttons.append([InlineKeyboardButton(
             f"📢 {m['nomi'] or m['link']}", url=m['link']
         )])
-    buttons.append([InlineKeyboardButton("✅ Tekshirish", callback_data="check_sub")])
+    buttons.append([btn_green("✅ Tekshirish", "check_sub")])
     
     await update.effective_message.reply_text(
         "⚠️ Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
@@ -281,9 +318,7 @@ async def hisobim(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📋 *So'nggi to'lovlar:*\n{tarix or 'Hali to\'lov yo\'q'}"
     )
     
-    buttons = [[InlineKeyboardButton(
-        "💳 Hisobni to'ldirish", callback_data="hisobni_toldirish"
-    )]]
+    buttons = [[btn_blue("💳 Hisobni to'ldirish", "hisobni_toldirish")]]
     
     await update.message.reply_text(
         text,
@@ -358,10 +393,10 @@ async def tolov_chek(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             buttons = [
                 [
-                    InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"tolov_ok_{tolov_id}_{user_id}_{miqdor}"),
-                    InlineKeyboardButton("❌ Bekor qilish", callback_data=f"tolov_no_{tolov_id}_{user_id}_{miqdor}"),
+                    btn_green("✅ Tasdiqlash", f"tolov_ok_{tolov_id}_{user_id}_{miqdor}"),
+                    btn_red("❌ Bekor qilish", f"tolov_no_{tolov_id}_{user_id}_{miqdor}"),
                 ],
-                [InlineKeyboardButton("💬 Xabar yuborish", callback_data=f"xabar_yu_{user_id}")]
+                [btn_blue("💬 Xabar yuborish", f"xabar_yu_{user_id}")]
             ]
             await update.get_bot().send_photo(
                 admin_id,
@@ -533,11 +568,8 @@ async def qism_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         narx = qism['narx']
         
         buttons = [
-            [InlineKeyboardButton(
-                f"💳 Balansdan to'lash ({format_son(narx)} so'm)",
-                callback_data=f"balans_tolov_{qism_id}_{kino_id}"
-            )],
-            [InlineKeyboardButton("💎 VIP sotib olish", callback_data="vip_menu")],
+            [btn_green(f"💳 Balansdan to'lash ({format_son(narx)} so'm)", f"balans_tolov_{qism_id}_{kino_id}")],
+            [btn_blue("💎 VIP sotib olish", "vip_menu")],
         ]
         
         await query.message.reply_text(
@@ -596,7 +628,7 @@ async def balans_tolov_callback(update: Update, context: ContextTypes.DEFAULT_TY
             f"💰 Kerak: {format_son(qism['narx'])} so'm\n"
             f"💼 Balansingiz: {format_son(user['balans'])} so'm",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("💳 To'ldirish", callback_data="hisobni_toldirish")
+                btn_green("💳 To'ldirish", "hisobni_toldirish")
             ]])
         )
         return
@@ -707,16 +739,10 @@ async def vip_chek(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             buttons = [
                 [
-                    InlineKeyboardButton(
-                        "✅ VIP Berish",
-                        callback_data=f"vip_ok_{tolov_id}_{user_id}_{tarif_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "❌ Bekor",
-                        callback_data=f"vip_no_{tolov_id}_{user_id}"
-                    ),
+                    btn_green("✅ VIP Berish", f"vip_ok_{tolov_id}_{user_id}_{tarif_id}"),
+                    btn_red("❌ Bekor", f"vip_no_{tolov_id}_{user_id}"),
                 ],
-                [InlineKeyboardButton("💬 Xabar", callback_data=f"xabar_yu_{user_id}")]
+                [btn_blue("💬 Xabar", f"xabar_yu_{user_id}")]
             ]
             await update.get_bot().send_photo(
                 admin_id, file_id,
@@ -817,22 +843,10 @@ async def vip_no_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def admin_menu_keyboard():
     """Admin menyu - rangli tugmalar (InlineKeyboard orqali)"""
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🎬 Kino qo'shish", callback_data="ap_kino_add"),
-            InlineKeyboardButton("📢 Kanal post", callback_data="ap_kanal_post"),
-        ],
-        [
-            InlineKeyboardButton("💎 VIP Tariflar", callback_data="ap_tarif"),
-            InlineKeyboardButton("💳 Karta qo'shish", callback_data="ap_karta"),
-        ],
-        [
-            InlineKeyboardButton("🔒 Majburiy obuna", callback_data="ap_majburiy"),
-            InlineKeyboardButton("📊 Statistika", callback_data="ap_stat"),
-        ],
-        [
-            InlineKeyboardButton("📨 Xabar yuborish", callback_data="ap_xabar"),
-            InlineKeyboardButton("💰 Pulik qism", callback_data="ap_pulik"),
-        ],
+        [btn_green("🎬 Kino qo'shish", "ap_kino_add"),  btn_blue("📢 Kanal post", "ap_kanal_post")],
+        [btn_blue("💎 VIP Tariflar", "ap_tarif"),          btn_green("💳 Karta qo'shish", "ap_karta")],
+        [btn_red("🔒 Majburiy obuna", "ap_majburiy"),      btn_blue("📊 Statistika", "ap_stat")],
+        [btn_blue("📨 Xabar yuborish", "ap_xabar"),        btn_red("💰 Pulik qism", "ap_pulik")],
     ])
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -953,8 +967,8 @@ async def ap_qism_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['qismlar'] = qismlar
     
     buttons = [
-        [InlineKeyboardButton("➕ Yana qism qo'shish", callback_data="ap_qism_yana")],
-        [InlineKeyboardButton("✅ Tugatish va saqlash", callback_data="ap_qism_save")],
+        [btn_blue("➕ Yana qism qo'shish", "ap_qism_yana")],
+        [btn_green("✅ Tugatish va saqlash", "ap_qism_save")],
     ]
     await update.message.reply_text(
         f"✅ {qism_raqam}-qism qo'shildi! (Jami: {len(qismlar)} qism)\n\n"
@@ -1065,14 +1079,14 @@ async def ap_kanal_kod(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎬 *{post['nomi']}*\n\n"
         f"▶ Qism : {post['qism']}\n"
         f"▶ Tili : {post['til']}\n"
-        f"▶ Ko'rish : [Tomosha qilish](https://t.me/YOUR_BOT_USERNAME)"
+        f"▶ Ko'rish : [Tomosha qilish](https://t.me/{BOT_USERNAME})"
     )
     
     # Ko'rish tugmasi
     buttons = [
         [InlineKeyboardButton(
             "🎬 Tomosha qilish 🎬",
-            url=f"https://t.me/YOUR_BOT_USERNAME?start={post['kod']}"
+            url=f"https://t.me/{BOT_USERNAME}?start={post['kod']}"
         )]
     ]
     
@@ -1084,8 +1098,8 @@ async def ap_kanal_kod(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption=caption + "\n\n*Ko'rinishi shunday bo'ladi. Tasdiqlaysizmi?*",
         reply_markup=InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("✅ Yuborish", callback_data="post_yuborish"),
-                InlineKeyboardButton("❌ Bekor", callback_data="ap_back"),
+                btn_green("✅ Yuborish", "post_yuborish"),
+                btn_red("❌ Bekor", "ap_back"),
             ]
         ]),
         parse_mode=ParseMode.MARKDOWN
@@ -1134,7 +1148,7 @@ async def ap_tarif_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )])
     
     buttons.append([InlineKeyboardButton("➕ Yangi tarif", callback_data="tarif_add")])
-    buttons.append([InlineKeyboardButton("🔙 Orqaga", callback_data="ap_back")])
+    buttons.append([btn_red("🔙 Orqaga", "ap_back")])
     
     await query.edit_message_text(
         text or "Tariflar yo'q",
@@ -1512,7 +1526,7 @@ async def ap_xabar_matn(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     admin_id,
                     f"👤 Foydalanuvchi ({target}) ga xabar yuborildi.",
                     reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("💬 Javob", callback_data=f"xabar_yu_{target}")
+                        btn_blue("💬 Javob", f"xabar_yu_{target}")
                     ]])
                 )
             await update.message.reply_text("✅ Xabar yuborildi!")
@@ -1545,10 +1559,10 @@ async def ap_kanal_xabar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     buttons = [
         [
-            InlineKeyboardButton("📢 Bepul foydalanuvchilarga", callback_data="ap_xabar_bepul"),
-            InlineKeyboardButton("💎 VIP foydalanuvchilarga", callback_data="ap_xabar_vip"),
+            btn_blue("📢 Bepul foydalanuvchilarga", "ap_xabar_bepul"),
+            btn_blue("💎 VIP foydalanuvchilarga", "ap_xabar_vip"),
         ],
-        [InlineKeyboardButton("👥 Hammaga", callback_data="ap_xabar_all")],
+        [btn_green("👥 Hammaga", "ap_xabar_all")],
         [InlineKeyboardButton("🔙 Orqaga", callback_data="ap_back")],
     ]
     await query.edit_message_text(
@@ -1697,3 +1711,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
