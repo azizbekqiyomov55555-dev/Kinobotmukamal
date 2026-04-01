@@ -107,7 +107,7 @@ def db_init():
         nomi TEXT NOT NULL,
         kod TEXT UNIQUE NOT NULL,
         rasm_file_id TEXT,
-        til TEXT DEFAULT 'O\'zbek tilida',
+        til TEXT DEFAULT 'O''zbek tilida',
         janr TEXT,
         davlat TEXT DEFAULT 'Xitoy',
         yil INTEGER,
