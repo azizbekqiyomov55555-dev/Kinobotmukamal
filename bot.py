@@ -26,7 +26,7 @@ from telegram.constants import ParseMode
 BOT_TOKEN    = os.environ.get("BOT_TOKEN", "")
 ADMIN_IDS    = [int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()]
 CHANNEL_ID   = os.environ.get("CHANNEL_ID", "")
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "your_bot")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "VipDramlarBot")
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
