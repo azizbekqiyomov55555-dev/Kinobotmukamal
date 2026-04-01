@@ -37,15 +37,43 @@ log = logging.getLogger(__name__)
 # style="success" \u2192 Yashil
 # style="danger"  \u2192 Qizil
 # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-_STYLE_EMOJI = {"primary": "🔵", "success": "🟢", "danger": "🔴"}
+# Telegram yangi rangli tugmalar (emoji yo'q, style parametri orqali)
+# primary -> ko'k, success -> yashil, danger -> qizil
 
-def ib(text, cbd, style=None):
-    label = f"{_STYLE_EMOJI[style]} {text}" if style in _STYLE_EMOJI else text
-    return InlineKeyboardButton(label, callback_data=cbd)
+# Rangli InlineKeyboardMarkup yasovchi yordamchi
+# Telegram Bot API 7.3+ dan boshlab tugmalarga "color" qo'yish imkoniyati
+# python-telegram-bot v21+ da qo'llab-quvvatlanadi
+_COLOR_MAP = {
+    "primary": 1,   # Ko'k
+    "success": 2,   # Yashil  
+    "danger":  3,   # Qizil
+}
 
-def lb(text, url, style=None):
-    label = f"{_STYLE_EMOJI[style]} {text}" if style in _STYLE_EMOJI else text
-    return InlineKeyboardButton(label, url=url)
+def colored_btn(text, cbd=None, url=None, style=None):
+    """Rangli inline tugma yasaydi (Telegram Bot API 7.3+)"""
+    kwargs = {"text": text}
+    if cbd:
+        kwargs["callback_data"] = cbd
+    if url:
+        kwargs["url"] = url
+    btn = InlineKeyboardButton(**kwargs)
+    # Telegram yangi API: button color (pay, login va boshqalar uchun emas)
+    # python-telegram-bot kutubxonasi hali to'liq qo'llab-quvvatlamasa ham
+    # to'g'ridan-to'g'ri API parametrini qo'shamiz
+    if style in _COLOR_MAP:
+        try:
+            # Yangi PTB versiyalarida color parametri
+            btn._unfreeze()
+            btn.color = _COLOR_MAP[style]
+        except Exception:
+            pass
+    return btn
+
+def ib_c(text, cbd, style=None):
+    return colored_btn(text, cbd=cbd, style=style)
+
+def lb_c(text, url, style=None):
+    return colored_btn(text, url=url, style=style)
 
 # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
 # DATABASE
@@ -235,7 +263,7 @@ async def check_sub(bot, uid):
     return failed
 
 async def send_sub_msg(update, failed):
-    btns = [[lb(r["nomi"] or r["link"], r["link"])] for r in failed]
+    btns = [[lb_c(r["nomi"] or r["link"], r["link"])] for r in failed]
     btns.append([ib("\u2705 Tekshirish", "check_sub", style="success")])
     await update.effective_message.reply_text(
         "*Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:*",
@@ -373,10 +401,10 @@ async def cb_yuklab(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for i, qism in enumerate(qismlar):
         if qism["is_vip"]:
             label = f"\ud83d\udc51 {qism['qism_raqam']}-qism"
-            btn   = ib(label, f"qism_{qism['id']}", style="danger")
+            btn   = ib_c(label, f"qism_{qism['id']}", style="danger")
         else:
             label = f"{qism['qism_raqam']}-qism"
-            btn   = ib(label, f"qism_{qism['id']}", style="primary")
+            btn   = ib_c(label, f"qism_{qism['id']}", style="primary")
         row.append(btn)
         if len(row) == 3 or i == len(qismlar) - 1:
             btns.append(row)
@@ -410,7 +438,7 @@ async def cb_qism(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         user   = get_user(uid)
         balans = user["balans"] if user else 0
         btns = [
-            [ib(f"\ud83d\udcb3 Balansdan to'lash ({som(qism['narx'])} so'm)", f"balans_{qism_id}", style="primary")],
+            [ib_c(f"\ud83d\udcb3 Balansdan to'lash ({som(qism['narx'])} so'm)", f"balans_{qism_id}", style="primary")],
             [ib("\ud83d\udc51 VIP sotib olish", "vip_menu", style="success")],
         ]
         await q.message.reply_text(
@@ -533,7 +561,7 @@ async def show_vip(update, ctx):
     btns = []
     for t in tariflar:
         txt += f"\u2022 {t['nomi']} \u2014 {som(t['narx'])} so'm ({t['kunlar']} kun)\n"
-        btns.append([ib(f"\ud83d\udc51 {t['nomi']} \u2014 {som(t['narx'])} so'm", f"vipbuy_{t['id']}", style="success")])
+        btns.append([ib_c(f"\ud83d\udc51 {t['nomi']} \u2014 {som(t['narx'])} so'm", f"vipbuy_{t['id']}", style="success")])
     await update.effective_message.reply_text(
         txt, reply_markup=InlineKeyboardMarkup(btns), parse_mode=ParseMode.MARKDOWN
     )
@@ -690,18 +718,31 @@ async def send_post_preview(msg, ctx, data, uid):
         rasm,
         caption=caption + "\n\n_Ko'rinishi shunaqa. Kanalga yuborilsinmi?_",
         reply_markup=InlineKeyboardMarkup([
-            [ib("\u2705 Kanalga yuborish", f"postsend_{uid}", style="success"),
-             ib("\u274c Bekor", "ap_back", style="danger")],
+            [ib_c("Kanalga yuborish", f"postsend_{uid}", style="success"),
+             ib_c("Bekor", "ap_back", style="danger")],
         ]),
         parse_mode=ParseMode.MARKDOWN
     )
 
-def _post_caption(nomi, qism, til, kod):
+def _post_caption(nomi, qism, til, kod, janr="Mini drama", jami_qism=None):
+    if jami_qism is None:
+        try:
+            con = db()
+            kino_row = con.execute("SELECT id FROM kinolar WHERE kod=?", (kod,)).fetchone()
+            if kino_row:
+                jami_qism = con.execute(
+                    "SELECT COUNT(*) FROM qismlar WHERE kino_id=?", (kino_row["id"],)
+                ).fetchone()[0]
+            else:
+                jami_qism = qism
+            con.close()
+        except Exception:
+            jami_qism = qism
     return (
         f"*{nomi}*\n"
         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        f"  Qism        :  {qism}/7\n"
-        f"  Janrlari    :  Mini drama\n"
+        f"  Qism        :  {qism}/{jami_qism}\n"
+        f"  Janrlari    :  {janr}\n"
         f"  Tili        :  {til}\n"
         f"  Ko'rish     :  [Tomosha qilish](https://t.me/{BOT_USERNAME}?start={kod})\n"
         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
@@ -721,7 +762,7 @@ async def cb_postsend(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     rasm = data.get("rasm", "")
 
     caption    = _post_caption(nomi, qism, til, kod)
-    kanal_btns = [[lb("\u25b6\ufe0f Tomosha qilish", f"https://t.me/{BOT_USERNAME}?start={kod}", style="primary")]]
+    kanal_btns = [[lb_c("Tomosha qilish", f"https://t.me/{BOT_USERNAME}?start={kod}", style="primary")]]
 
     try:
         await ctx.bot.send_photo(
@@ -757,7 +798,7 @@ async def show_vip_admin(update, ctx):
     btns = []
     for t in tariflar:
         txt += f"{t['nomi']} \u2014 {som(t['narx'])} so'm ({t['kunlar']} kun)\n"
-        btns.append([ib(f"\ud83d\uddd1 O'chirish: {t['nomi']}", f"tdel_{t['id']}", style="danger")])
+        btns.append([ib_c(f"\ud83d\uddd1 O'chirish: {t['nomi']}", f"tdel_{t['id']}", style="danger")])
     btns.append([ib("\u2795 Yangi tarif qo'shish", "tadd", style="success")])
     await update.message.reply_text(
         txt or "Tariflar yo'q",
@@ -793,7 +834,7 @@ async def show_kartalar(update, ctx):
     btns = []
     for k in kartalar:
         txt += f"`{k['raqam']}` \u2014 {k['egasi'] or '-'}\n"
-        btns.append([ib(f"\ud83d\uddd1 O'chirish: {k['raqam']}", f"kdel_{k['id']}", style="danger")])
+        btns.append([ib_c(f"\ud83d\uddd1 O'chirish: {k['raqam']}", f"kdel_{k['id']}", style="danger")])
     btns.append([ib("\u2795 Karta qo'shish", "kadd", style="success")])
     await update.message.reply_text(
         txt or "Kartalar yo'q",
@@ -829,7 +870,7 @@ async def show_majburiy(update, ctx):
     btns = []
     for r in rows:
         txt += f"\u2014 {r['nomi'] or r['link']} ({r['tur']})\n"
-        btns.append([ib(f"\ud83d\uddd1 O'chirish: {r['nomi'] or r['link']}", f"mdel_{r['id']}", style="danger")])
+        btns.append([ib_c(f"\ud83d\uddd1 O'chirish: {r['nomi'] or r['link']}", f"mdel_{r['id']}", style="danger")])
     btns.append([ib("\u2795 Qo'shish", "madd", style="success")])
     await update.message.reply_text(
         txt or "Majburiy obunalar yo'q",
@@ -1394,7 +1435,7 @@ async def admin_state_media(update, ctx, state, data):
         data["qism_raqam"] = qism_raqam + 1
         state_set(uid, "k_qism", data)
         btns = [
-            [ib(f"\u2705 Tugallash ({qism_raqam}-qism saqlandi)", f"kqism_done_{kino_id}", style="success")],
+            [ib_c(f"\u2705 Tugallash ({qism_raqam}-qism saqlandi)", f"kqism_done_{kino_id}", style="success")],
         ]
         await msg.reply_text(
             f"\u2705 {qism_raqam}-qism saqlandi!\n\nKeyingi qismni yuboring yoki tugallang:",
