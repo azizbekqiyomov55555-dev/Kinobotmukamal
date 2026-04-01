@@ -320,12 +320,14 @@ async def show_kino(update, ctx, kino):
     jami  = len(qismlar)
 
     # Image 2 formatida caption
+    til_nomi = kino['til'] or "O'zbek tilida"
+    janr_nomi = kino['janr'] or 'Mini drama'
     caption = (
         f"\ud83c\udfac *{kino['nomi']}*\n"
         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
         f"  Qism       :  {joriy}/{jami}\n"
-        f"  Janrlari   :  {kino['janr'] or 'Mini drama'}\n"
-        f"  Tili       :  {kino['til'] or \"O'zbek tilida\"}\n"
+        f"  Janrlari   :  {janr_nomi}\n"
+        f"  Tili       :  {til_nomi}\n"
         f"  Ko'rish    :  \ud83c\udf7f @{BOT_USERNAME}\n"
         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
     )
