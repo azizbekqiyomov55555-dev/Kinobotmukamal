@@ -727,67 +727,115 @@ async def admin_settings(msg: types.Message):
     cv   = get_setting("currency","Sum")
     st_s = "✅ Faol" if get_setting("service_time","1")=="1" else "❌ Nofaol"
     st_p = "✅ Faol" if get_setting("premium_emoji","1")=="1" else "❌ Nofaol"
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="💰 Referal o'zgartirish")],
-        [KeyboardButton(text="💲 Valyuta o'zgartirish")],
-        [KeyboardButton(text=f"🕐 Xizmat vaqti: {st_s}")],
-        [KeyboardButton(text=f"✨ Premium emoji: {st_p}")],
-        [KeyboardButton(text="🤖 Bot hisobi")],
-        [KeyboardButton(text="◀️ Orqaga")],
-    ], resize_keyboard=True)
+    b = InlineKeyboardBuilder()
+    b.button(text="💰 Referal o'zgartirish",        callback_data="set_ref")
+    b.button(text="💱 Valyuta o'zgartirish",         callback_data="set_cur")
+    b.button(text=f"🕐 Xizmat vaqti: {st_s}",       callback_data="tog_svctime")
+    b.button(text=f"✨ Premium emoji: {st_p}",       callback_data="tog_premium")
+    b.adjust(1)
     await msg.answer(
-        f"⚙️ Asosiy sozlamalar:\n\n"
-        f"♦️ Referal: {rb} {cv}\n♦️ Valyuta: {cv}\n"
-        f"♦️ Xizmat bajarilish vaqti: {st_s}\n♦️ Premium emoji: {st_p}\n\n"
-        f"_Premium emoji faqat Telegram Premium foydalanuvchilari botlarida ishlaydi._",
-        reply_markup=kb
+        f"⚙️ <b>Asosiy sozlamalar:</b>\n\n"
+        f"♦️ Referal: {rb} {cv}\n"
+        f"♦️ Valyuta: {cv}\n"
+        f"♦️ Xizmat bajarilish vaqti: {st_s}\n"
+        f"♦️ Premium emoji: {st_p}\n\n"
+        f"<i>Premium emoji faqat Telegramda premium obunasi bor foydalanuvchi botlarida ishlaydi.</i>",
+        parse_mode="HTML",
+        reply_markup=b.as_markup()
     )
 
-@dp.message(F.text == "💰 Referal o'zgartirish")
-async def chg_ref(msg: types.Message, state: FSMContext):
-    if msg.from_user.id not in ADMIN_IDS: return
+@dp.callback_query(F.data == "set_ref")
+async def cb_set_ref(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
     await state.set_state(AS.set_referral)
-    await msg.answer(f"💰 Yangi referal miqdorini kiriting ({cur()}):", reply_markup=cancel_kb())
+    await cb.message.answer(f"💰 Yangi referal miqdorini kiriting ({cur()}):", reply_markup=cancel_kb())
+    await cb.answer()
 
+@dp.callback_query(F.data == "set_cur")
+async def cb_set_cur(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    b = InlineKeyboardBuilder()
+    b.button(text="🇺🇿 So'm (UZS)", callback_data="cur_Sum")
+    b.button(text="🇺🇸 Dollar (USD)", callback_data="cur_USD")
+    b.button(text="🇷🇺 Rubl (RUB)", callback_data="cur_RUB")
+    b.adjust(1)
+    await cb.message.answer("💱 Valyutani tanlang:", reply_markup=b.as_markup())
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("cur_"))
+async def cb_cur_select(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    val = cb.data.replace("cur_", "")
+    set_setting("currency", val)
+    await cb.answer(f"✅ Valyuta: {val}")
+    await cb.message.answer(f"✅ Valyuta <b>{val}</b> ga o'zgartirildi!", parse_mode="HTML",
+                             reply_markup=admin_kb())
+
+@dp.callback_query(F.data == "tog_svctime")
+async def cb_tog_svctime(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    v = "0" if get_setting("service_time","1")=="1" else "1"
+    set_setting("service_time", v)
+    await cb.answer("✅ O'zgartirildi!")
+    # Xabarni yangilash
+    rb   = get_setting("referral_bonus","2500")
+    cv   = get_setting("currency","Sum")
+    st_s = "✅ Faol" if v=="1" else "❌ Nofaol"
+    st_p = "✅ Faol" if get_setting("premium_emoji","1")=="1" else "❌ Nofaol"
+    b = InlineKeyboardBuilder()
+    b.button(text="💰 Referal o'zgartirish",        callback_data="set_ref")
+    b.button(text="💱 Valyuta o'zgartirish",         callback_data="set_cur")
+    b.button(text=f"🕐 Xizmat vaqti: {st_s}",       callback_data="tog_svctime")
+    b.button(text=f"✨ Premium emoji: {st_p}",       callback_data="tog_premium")
+    b.adjust(1)
+    try:
+        await cb.message.edit_text(
+            f"⚙️ <b>Asosiy sozlamalar:</b>\n\n"
+            f"♦️ Referal: {rb} {cv}\n♦️ Valyuta: {cv}\n"
+            f"♦️ Xizmat bajarilish vaqti: {st_s}\n♦️ Premium emoji: {st_p}\n\n"
+            f"<i>Premium emoji faqat Telegramda premium obunasi bor foydalanuvchi botlarida ishlaydi.</i>",
+            parse_mode="HTML", reply_markup=b.as_markup()
+        )
+    except: pass
+
+@dp.callback_query(F.data == "tog_premium")
+async def cb_tog_premium(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    v = "0" if get_setting("premium_emoji","1")=="1" else "1"
+    set_setting("premium_emoji", v)
+    await cb.answer("✅ O'zgartirildi!")
+    rb   = get_setting("referral_bonus","2500")
+    cv   = get_setting("currency","Sum")
+    st_s = "✅ Faol" if get_setting("service_time","1")=="1" else "❌ Nofaol"
+    st_p = "✅ Faol" if v=="1" else "❌ Nofaol"
+    b = InlineKeyboardBuilder()
+    b.button(text="💰 Referal o'zgartirish",        callback_data="set_ref")
+    b.button(text="💱 Valyuta o'zgartirish",         callback_data="set_cur")
+    b.button(text=f"🕐 Xizmat vaqti: {st_s}",       callback_data="tog_svctime")
+    b.button(text=f"✨ Premium emoji: {st_p}",       callback_data="tog_premium")
+    b.adjust(1)
+    try:
+        await cb.message.edit_text(
+            f"⚙️ <b>Asosiy sozlamalar:</b>\n\n"
+            f"♦️ Referal: {rb} {cv}\n♦️ Valyuta: {cv}\n"
+            f"♦️ Xizmat bajarilish vaqti: {st_s}\n♦️ Premium emoji: {st_p}\n\n"
+            f"<i>Premium emoji faqat Telegramda premium obunasi bor foydalanuvchi botlarida ishlaydi.</i>",
+            parse_mode="HTML", reply_markup=b.as_markup()
+        )
+    except: pass
+
+# ── Bot hisobi ────────────────────────────────────────────
 @dp.message(AS.set_referral)
 async def do_chg_ref(msg: types.Message, state: FSMContext):
     if msg.text == "❌ Bekor qilish":
-        await state.clear(); await admin_settings(msg); return
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
     try:
         v = float(msg.text); set_setting("referral_bonus", v)
-        await state.clear(); await msg.answer(f"✅ Referal {v:.0f} ga o'zgartirildi!")
-        await admin_settings(msg)
-    except: await msg.answer("❌ Noto'g'ri miqdor")
+        await state.clear()
+        await msg.answer(f"✅ Referal <b>{v:.0f}</b> {cur()} ga o'zgartirildi!", parse_mode="HTML",
+                         reply_markup=admin_kb())
+    except: await msg.answer("❌ Noto'g'ri miqdor, raqam kiriting:")
 
-@dp.message(F.text == "💲 Valyuta o'zgartirish")
-async def chg_cur(msg: types.Message, state: FSMContext):
-    if msg.from_user.id not in ADMIN_IDS: return
-    await state.set_state(AS.set_currency)
-    await msg.answer("💲 Yangi valyutani kiriting (Sum, USD, UZS ...):", reply_markup=cancel_kb())
-
-@dp.message(AS.set_currency)
-async def do_chg_cur(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear(); await admin_settings(msg); return
-    set_setting("currency", msg.text)
-    await state.clear(); await msg.answer(f"✅ Valyuta: {msg.text}")
-    await admin_settings(msg)
-
-@dp.message(F.text.startswith("🕐 Xizmat vaqti"))
-async def toggle_svc_time(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS: return
-    v = "0" if get_setting("service_time","1")=="1" else "1"
-    set_setting("service_time", v)
-    await msg.answer("✅ O'zgartirildi!"); await admin_settings(msg)
-
-@dp.message(F.text.startswith("✨ Premium emoji"))
-async def toggle_premium(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS: return
-    v = "0" if get_setting("premium_emoji","1")=="1" else "1"
-    set_setting("premium_emoji", v)
-    await msg.answer("✅ O'zgartirildi!"); await admin_settings(msg)
-
-# ── Bot hisobi ────────────────────────────────────────────
 @dp.message(F.text == "🤖 Bot hisobi")
 async def bot_account_menu(msg: types.Message, state: FSMContext):
     if msg.from_user.id not in ADMIN_IDS: return
