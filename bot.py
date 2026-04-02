@@ -501,7 +501,7 @@ async def my_orders(msg: types.Message):
     )
 
 # ═══════════════════════════════════════════════════════════
-#  USER — Buyurtma berish  ← TUZATILGAN QISM
+#  USER — Buyurtma berish
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "Buyurtma berish")
 async def place_order(msg: types.Message, state: FSMContext):
@@ -511,7 +511,6 @@ async def place_order(msg: types.Message, state: FSMContext):
     if not cats:
         await msg.answer("❌ Hozirda xizmatlar mavjud emas."); return
 
-    # Bo'limlarni 2 ta qatorda, emojisiz ko'rsatish
     b = InlineKeyboardBuilder()
     for cid, name in cats:
         b.button(text=name, callback_data=f"order_cat_{cid}")
@@ -520,58 +519,67 @@ async def place_order(msg: types.Message, state: FSMContext):
 
     await state.set_state(US.select_category)
     await state.update_data(cats={str(cid): name for cid, name in cats})
-
-    # Reply keyboard olib tashlash va inline ko'rsatish
     await msg.answer(".", reply_markup=ReplyKeyboardRemove())
-    await msg.answer("📁 Bo'limni tanlang:", reply_markup=b.as_markup())
+    await msg.answer("Quyidagi ijtimoiy tarmoqlardan birini tanlang.", reply_markup=b.as_markup())
+
 
 @dp.callback_query(F.data == "order_back_main")
 async def order_back_main(cb: types.CallbackQuery, state: FSMContext):
     await state.clear()
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await cb.message.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(cb.from_user.id in ADMIN_IDS))
     await cb.answer()
 
+
+# ─── Kategoriya → xizmatlar ro'yxati ───────────────────────
 @dp.callback_query(F.data.startswith("order_cat_"))
 async def order_cat_selected(cb: types.CallbackQuery, state: FSMContext):
     cat_id = int(cb.data.replace("order_cat_", ""))
     conn = db(); c = conn.cursor()
-    c.execute("SELECT id,name,price_per1000,min_qty,max_qty FROM services WHERE category_id=? AND is_active=1", (cat_id,))
+    c.execute(
+        "SELECT id,name,price_per1000,min_qty,max_qty FROM services "
+        "WHERE category_id=? AND is_active=1", (cat_id,)
+    )
     svcs = c.fetchall()
     c.execute("SELECT name FROM categories WHERE id=?", (cat_id,))
-    cat_name_row = c.fetchone()
-    conn.close()
-
-    cat_name = cat_name_row[0] if cat_name_row else "Bo'lim"
+    cat_row  = c.fetchone(); conn.close()
+    cat_name = cat_row[0] if cat_row else "Bolim"
 
     if not svcs:
         await cb.answer("❌ Bu bo'limda xizmatlar yo'q.", show_alert=True); return
 
-    lines = f"📋 {cat_name} — xizmatlarni tanlang:\n\n"
-    for sid, sname, price, mn, mx in svcs:
-        lines += f"• {sname}\n  💰 {price:.0f} {cur()}/1000 | Min:{mn}–{mx}\n\n"
-
     b = InlineKeyboardBuilder()
     for sid, sname, price, mn, mx in svcs:
-        b.button(text=sname, callback_data=f"sel_svc_{sid}")
+        b.button(text=f"{sname} - {price:.0f} {cur()}", callback_data=f"sel_svc_{sid}")
     b.button(text="◀️ Orqaga", callback_data="back_to_cats")
-    b.adjust(2)
+    b.adjust(1)
 
     await state.update_data(
-        svcs={sid: (sid, sname, price, mn, mx) for sid, sname, price, mn, mx in svcs},
-        last_cat_id=cat_id
+        svcs={str(sid): (sid, sname, price, mn, mx) for sid, sname, price, mn, mx in svcs},
+        last_cat_id=cat_id,
+        cat_name=cat_name
     )
     await state.set_state(US.select_service)
-    await cb.message.answer(lines, reply_markup=b.as_markup())
+
+    text = "Quyidagi bo'limlardan birini tanlang."
+    try:
+        await cb.message.edit_text(text, reply_markup=b.as_markup())
+    except Exception:
+        await cb.message.answer(text, reply_markup=b.as_markup())
     await cb.answer()
 
+
+# ─── Orqaga: kategoriyalarga ────────────────────────────────
 @dp.callback_query(F.data == "back_to_cats")
 async def back_to_cats(cb: types.CallbackQuery, state: FSMContext):
-    await cb.answer()
     conn = db(); c = conn.cursor()
     c.execute("SELECT id,name FROM categories WHERE is_active=1")
     cats = c.fetchall(); conn.close()
     if not cats:
-        await cb.message.answer("❌ Hozirda xizmatlar mavjud emas."); return
+        await cb.answer("❌ Hozirda xizmatlar mavjud emas.", show_alert=True); return
 
     b = InlineKeyboardBuilder()
     for cid, name in cats:
@@ -581,67 +589,189 @@ async def back_to_cats(cb: types.CallbackQuery, state: FSMContext):
 
     await state.set_state(US.select_category)
     await state.update_data(cats={str(cid): name for cid, name in cats})
-    await cb.message.answer("📁 Bo'limni tanlang:", reply_markup=b.as_markup())
-
-@dp.callback_query(F.data.startswith("sel_svc_"))
-async def sel_svc(cb: types.CallbackQuery, state: FSMContext):
-    svc_id = int(cb.data.replace("sel_svc_",""))
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT * FROM services WHERE id=?", (svc_id,))
-    svc = c.fetchone(); conn.close()
-    if not svc:
-        await cb.answer("❌ Xizmat topilmadi", show_alert=True); return
-    await state.update_data(svc=svc)
-    await state.set_state(US.enter_link)
-    await cb.message.answer(
-        f"📌 {svc[4]}\n💰 {svc[7]:.0f} {cur()}/1000\nMin:{svc[5]} Max:{svc[6]}\n\n🔗 Linkni kiriting:",
-        reply_markup=cancel_kb()
-    )
+    try:
+        await cb.message.edit_text(
+            "Quyidagi ijtimoiy tarmoqlardan birini tanlang.",
+            reply_markup=b.as_markup()
+        )
+    except Exception:
+        await cb.message.answer(
+            "Quyidagi ijtimoiy tarmoqlardan birini tanlang.",
+            reply_markup=b.as_markup()
+        )
     await cb.answer()
 
-@dp.message(US.enter_link)
-async def enter_link(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear()
-        await msg.answer("Bekor qilindi", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)); return
-    if not msg.text.startswith("http"):
-        await msg.answer("❌ Link https:// bilan boshlanishi kerak"); return
-    await state.update_data(link=msg.text)
-    data = await state.get_data()
-    svc = data["svc"]
-    await state.set_state(US.enter_quantity)
-    await msg.answer(f"📊 Miqdorni kiriting (Min:{svc[5]}, Max:{svc[6]}):")
 
+# ─── Xizmat → kartochka + "Buyurtma berish" tugmasi ─────────
+@dp.callback_query(F.data.startswith("sel_svc_"))
+async def sel_svc(cb: types.CallbackQuery, state: FSMContext):
+    svc_id = int(cb.data.replace("sel_svc_", ""))
+    conn = db(); c = conn.cursor()
+    c.execute(
+        "SELECT s.id, s.category_id, s.api_id, s.api_service_id, s.name, "
+        "s.min_qty, s.max_qty, s.price_per1000, s.is_active, cat.name "
+        "FROM services s LEFT JOIN categories cat ON s.category_id=cat.id "
+        "WHERE s.id=?", (svc_id,)
+    )
+    row = c.fetchone(); conn.close()
+    if not row:
+        await cb.answer("❌ Xizmat topilmadi", show_alert=True); return
+
+    svc      = row[:9]
+    cat_name = row[9] or ""
+
+    await state.update_data(svc=svc, svc_cat_name=cat_name)
+    await state.set_state(US.enter_quantity)
+
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Buyurtma berish", callback_data=f"start_order_{svc_id}")
+    b.button(text="◀️ Orqaga",          callback_data=f"order_cat_{svc[1]}")
+    b.adjust(1)
+
+    text = (
+        f"{cat_name} - {svc[4]}\n\n"
+        f"💰 Narxi (1000x): {svc[7]:.0f} {cur()}\n"
+        f"⬇️ Minimal: {svc[5]} ta\n"
+        f"⬆️ Maksimal: {svc[6]} ta"
+    )
+    try:
+        await cb.message.edit_text(text, reply_markup=b.as_markup())
+    except Exception:
+        await cb.message.answer(text, reply_markup=b.as_markup())
+    await cb.answer()
+
+
+# ─── "Buyurtma berish" → miqdor so'raydi ───────────────────
+@dp.callback_query(F.data.startswith("start_order_"))
+async def start_order(cb: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    svc  = data.get("svc")
+    if not svc:
+        await cb.answer("❌ Xizmat topilmadi", show_alert=True); return
+
+    cat_name = data.get("svc_cat_name", "")
+    await state.set_state(US.enter_quantity)
+
+    b = InlineKeyboardBuilder()
+    b.button(text="◀️ Orqaga", callback_data=f"sel_svc_{svc[0]}")
+    b.adjust(1)
+
+    text = (
+        f"{cat_name} - {svc[4]}\n\n"
+        f"🔢 Buyurtma miqdorini kiriting:\n\n"
+        f"⬇️ Minimal: {svc[5]} ta\n"
+        f"⬆️ Maksimal: {svc[6]} ta"
+    )
+    try:
+        await cb.message.edit_text(text, reply_markup=b.as_markup())
+    except Exception:
+        await cb.message.answer(text)
+    await cb.answer()
+
+
+# ─── Miqdor kiritildi → link so'raydi ──────────────────────
 @dp.message(US.enter_quantity)
 async def enter_qty(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
+    if msg.text in ("❌ Bekor qilish", "◀️ Orqaga"):
         await state.clear()
-        await msg.answer("Bekor qilindi", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)); return
+        await msg.answer("Bekor qilindi", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
+        return
     data = await state.get_data()
-    svc  = data["svc"]
+    svc  = data.get("svc")
+    if not svc:
+        await state.clear()
+        await msg.answer("❌ Xatolik, qaytadan boshlang.", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
+        return
     try:
         qty = int(msg.text)
-        assert svc[5] <= qty <= svc[6]
-    except:
-        await msg.answer(f"❌ Miqdor {svc[5]}–{svc[6]} orasida bo'lishi kerak"); return
-    amount = (qty / 1000) * svc[7]
-    u      = get_user(msg.from_user.id)
-    text   = (
-        f"📋 Buyurtma:\n📌 {svc[4]}\n🔗 {data['link']}\n"
-        f"📊 Miqdor: {qty}\n💰 {amount:.0f} {cur()}\n"
-        f"💵 Balans: {u[3]:.0f} {cur()}\n\n"
-    )
-    if u[3] < amount:
-        text += f"❌ Balans yetarli emas! Yetishmaydi: {amount-u[3]:.0f} {cur()}"
-        await msg.answer(text, reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
-        await state.clear(); return
-    text += "✅ Tasdiqlaysizmi?"
-    b = InlineKeyboardBuilder()
-    b.button(text="✅ Tasdiqlash",   callback_data="order_yes")
-    b.button(text="❌ Bekor qilish", callback_data="order_no")
-    await state.update_data(qty=qty, amount=amount)
-    await msg.answer(text, reply_markup=b.as_markup())
+        if not (svc[5] <= qty <= svc[6]):
+            raise ValueError
+    except (ValueError, TypeError):
+        await msg.answer(f"❌ Miqdor {svc[5]} – {svc[6]} orasida bolishi kerak"); return
 
+    await state.update_data(qty=qty)
+    await state.set_state(US.enter_link)
+
+    cat_name = data.get("svc_cat_name", "")
+    amount   = (qty / 1000) * svc[7]
+
+    await msg.answer(
+        f"{cat_name} - {svc[4]}\n\n"
+        f"📊 Miqdor: {qty} ta\n"
+        f"💰 Narx: {amount:.0f} {cur()}\n\n"
+        f"🔗 Linkni yuboring:\n"
+        f"(Masalan: https://t.me/username)",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="◀️ Orqaga")]],
+            resize_keyboard=True
+        )
+    )
+
+
+# ─── Link kiritildi → tasdiqlash ────────────────────────────
+@dp.message(US.enter_link)
+async def enter_link(msg: types.Message, state: FSMContext):
+    if msg.text in ("❌ Bekor qilish", "◀️ Orqaga"):
+        data = await state.get_data()
+        svc  = data.get("svc")
+        await state.set_state(US.enter_quantity)
+        if svc:
+            cat_name = data.get("svc_cat_name", "")
+            b = InlineKeyboardBuilder()
+            b.button(text="◀️ Orqaga", callback_data=f"sel_svc_{svc[0]}")
+            b.adjust(1)
+            await msg.answer(
+                f"{cat_name} - {svc[4]}\n\n"
+                f"🔢 Buyurtma miqdorini kiriting:\n\n"
+                f"⬇️ Minimal: {svc[5]} ta\n"
+                f"⬆️ Maksimal: {svc[6]} ta",
+                reply_markup=b.as_markup()
+            )
+        else:
+            await msg.answer("Bekor qilindi", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
+        return
+
+    if not msg.text.startswith("http"):
+        await msg.answer("❌ Link https:// yoki http:// bilan boshlanishi kerak"); return
+
+    data     = await state.get_data()
+    svc      = data["svc"]
+    qty      = data["qty"]
+    amount   = (qty / 1000) * svc[7]
+    u        = get_user(msg.from_user.id)
+    cat_name = data.get("svc_cat_name", "")
+
+    await state.update_data(link=msg.text, amount=amount)
+
+    if u[3] < amount:
+        await msg.answer(
+            f"❌ Balansingiz yetarli emas!\n\n"
+            f"💵 Balans: {u[3]:.0f} {cur()}\n"
+            f"💰 Kerak: {amount:.0f} {cur()}\n"
+            f"➖ Yetishmaydi: {amount - u[3]:.0f} {cur()}\n\n"
+            f"Hisob to'ldirish uchun asosiy menyudan foydalaning.",
+            reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)
+        )
+        await state.clear(); return
+
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Yuborish",     callback_data="order_yes")
+    b.button(text="❌ Bekor qilish", callback_data="order_no")
+    b.adjust(1)
+
+    await msg.answer(
+        f"📋 Buyurtma ma'lumotlari:\n\n"
+        f"📌 Xizmat: {cat_name} - {svc[4]}\n"
+        f"🔗 Link: {msg.text}\n"
+        f"📊 Miqdor: {qty} ta\n"
+        f"💰 Tolash: {amount:.0f} {cur()}\n"
+        f"💵 Balans: {u[3]:.0f} {cur()}\n\n"
+        f"Tasdiqlaysizmi?",
+        reply_markup=b.as_markup()
+    )
+
+
+# ─── Tasdiqlash → API ───────────────────────────────────────
 @dp.callback_query(F.data == "order_yes")
 async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
     data   = await state.get_data()
@@ -664,44 +794,58 @@ async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
             if res and "order" in res:
                 api_order_id = str(res["order"])
             elif res and "error" in res:
-                api_error = res["error"]
+                api_error = str(res["error"])
 
-    c.execute("INSERT INTO orders(user_id,service_id,api_order_id,link,quantity,amount,status) VALUES(?,?,?,?,?,?,?)",
-              (uid, svc[0], api_order_id, link, qty, amount, "pending"))
+    c.execute(
+        "INSERT INTO orders(user_id,service_id,api_order_id,link,quantity,amount,status) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (uid, svc[0], api_order_id, link, qty, amount, "pending")
+    )
     order_id = c.lastrowid
-    c.execute("INSERT INTO transactions(user_id,amount,type,description) VALUES(?,?,?,?)",
-              (uid, -amount, "order", f"Buyurtma #{order_id}"))
+    c.execute(
+        "INSERT INTO transactions(user_id,amount,type,description) VALUES(?,?,?,?)",
+        (uid, -amount, "order", f"Buyurtma #{order_id}")
+    )
     conn.commit(); conn.close()
 
-    # Yangi balansni olish
-    u = get_user(uid)
+    u           = get_user(uid)
     new_balance = u[3] if u else 0
+    cat_name    = data.get("svc_cat_name", "")
 
-    result_text = (
-        f"✅ Buyurtma muvaffaqiyatli yuborildi!\n\n"
-        f"🆔 Buyurtma raqami: #{order_id}\n"
-        f"📌 Xizmat: {svc[4]}\n"
-        f"🔢 Xizmat ID: {svc[3]}\n"
-        f"📊 Miqdor: {qty}\n"
-        f"🔗 Link: {link}\n"
-        f"💰 Yechildi: {amount:.0f} {cur()}\n"
-        f"💵 Qolgan balans: {new_balance:.0f} {cur()}\n"
-    )
+    lines = [
+        "✅ Buyurtma muvaffaqiyatli yuborildi!\n",
+        f"🆔 Buyurtma: #{order_id}",
+        f"📌 Xizmat: {cat_name} - {svc[4]}",
+        f"🔗 Link: {link}",
+        f"📊 Miqdor: {qty} ta",
+        f"💰 Yechildi: {amount:.0f} {cur()}",
+        f"💵 Qolgan balans: {new_balance:.0f} {cur()}",
+    ]
     if api_order_id:
-        result_text += f"📡 API buyurtma ID: {api_order_id}\n"
+        lines.append(f"📡 API order ID: {api_order_id}")
     if api_error:
-        result_text += f"⚠️ API xato: {api_error}\n"
-    result_text += f"\n⏳ Xizmat bajarilmoqda..."
+        lines.append(f"⚠️ API xato: {api_error}")
+    lines.append("\n⏳ Xizmat bajarilmoqda...")
 
     await state.clear()
-    await cb.message.answer(result_text, reply_markup=main_kb(uid in ADMIN_IDS))
+    try:
+        await cb.message.edit_text("\n".join(lines), reply_markup=None)
+    except Exception:
+        await cb.message.answer("\n".join(lines))
+    await cb.message.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(uid in ADMIN_IDS))
     await cb.answer()
+
 
 @dp.callback_query(F.data == "order_no")
 async def order_cancel(cb: types.CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.message.answer("❌ Bekor qilindi.", reply_markup=main_kb(cb.from_user.id in ADMIN_IDS))
+    try:
+        await cb.message.edit_text("❌ Buyurtma bekor qilindi.", reply_markup=None)
+    except Exception:
+        pass
+    await cb.message.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(cb.from_user.id in ADMIN_IDS))
     await cb.answer()
+
 
 # ═══════════════════════════════════════════════════════════
 #  USER — Murojaat
