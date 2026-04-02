@@ -100,6 +100,15 @@ def init_db():
         created_at  TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
+    c.execute("""CREATE TABLE IF NOT EXISTS manual_payments (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        name        TEXT NOT NULL,
+        card_number TEXT NOT NULL,
+        card_expiry TEXT NOT NULL,
+        card_holder TEXT NOT NULL,
+        is_active   INTEGER DEFAULT 1
+    )""")
+
     c.execute("""CREATE TABLE IF NOT EXISTS settings (
         key   TEXT PRIMARY KEY,
         value TEXT
@@ -203,8 +212,18 @@ class AS(StatesGroup):          # Admin States
     set_referral       = State()
     set_currency       = State()
     broadcast_msg      = State()
+    broadcast_uid      = State()   # Oddiy xabar: foydalanuvchi ID
+    broadcast_uid_msg  = State()   # Oddiy xabar: xabar matni
     user_id_input      = State()
     balance_amount     = State()
+    # Manual payment
+    mpay_name          = State()
+    mpay_card          = State()
+    mpay_expiry        = State()
+    mpay_holder        = State()
+    # Bot account (boshqa botni APIsi)
+    bot_api_token      = State()
+    bot_api_url        = State()
     add_channel        = State()
     guide_title        = State()
     guide_content      = State()
@@ -370,13 +389,36 @@ async def topup(msg: types.Message):
     b = InlineKeyboardBuilder()
     if get_setting("payme_active") == "1" or get_setting("click_active") == "1":
         b.button(text="💠 Avto-to'lov (Payme, Click)", callback_data="pay_auto")
-    if get_setting("uzcart_active") == "1":
-        b.button(text="Uzcart", callback_data="pay_uzcart")
+    # Manual payment tizimlari
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT id,name FROM manual_payments WHERE is_active=1")
+    mpays = c.fetchall(); conn.close()
+    for pid, pname in mpays:
+        b.button(text=f"💳 {pname}", callback_data=f"pay_manual_{pid}")
     b.adjust(1)
     kb = b.as_markup()
     if not kb.inline_keyboard:
         await msg.answer("❌ Hozirda to'lov tizimlari faol emas."); return
     await msg.answer("💳 Quyidagilardan birini tanlang:", reply_markup=kb)
+
+@dp.callback_query(F.data.startswith("pay_manual_"))
+async def pay_manual_show(cb: types.CallbackQuery):
+    pid = int(cb.data.replace("pay_manual_",""))
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT name,card_number,card_expiry,card_holder FROM manual_payments WHERE id=?", (pid,))
+    pay = c.fetchone(); conn.close()
+    if not pay:
+        await cb.answer("❌ Topilmadi", show_alert=True); return
+    pname, pcard, pexpiry, pholder = pay
+    await cb.message.answer(
+        f"💳 <b>{pname}</b>\n\n"
+        f"🔢 Karta raqami: <code>{pcard}</code>\n"
+        f"📅 Amal qilish muddati: {pexpiry}\n"
+        f"👤 Karta egasi: {pholder}\n\n"
+        f"Ushbu kartaga pul o'tkazing va admin bilan bog'laning.",
+        parse_mode="HTML"
+    )
+    await cb.answer()
 
 @dp.callback_query(F.data.startswith("pay_"))
 async def pay_method(cb: types.CallbackQuery, state: FSMContext):
@@ -476,35 +518,39 @@ async def sel_cat(msg: types.Message, state: FSMContext):
     svcs = c.fetchall(); conn.close()
     if not svcs:
         await msg.answer("❌ Bu bo'limda xizmatlar yo'q."); return
-    lines = f"📋 {msg.text}:\n\n"
+    lines = f"📋 {msg.text} — xizmatlarni tanlang:\n\n"
     for sid, sname, price, mn, mx in svcs:
-        lines += f"• {sname}\n  💰 {price:.0f} {cur()}/1000 | Min:{mn} Max:{mx}\n\n"
-    kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=sname)] for _,sname,*_ in svcs] + [[KeyboardButton(text="◀️ Orqaga")]],
-        resize_keyboard=True
-    )
-    await state.update_data(svcs={sname: sid for sid, sname, *_ in svcs})
+        lines += f"• {sname}\n  💰 {price:.0f} {cur()}/1000 | Min:{mn}–{mx}\n\n"
+    b = InlineKeyboardBuilder()
+    for sid, sname, price, mn, mx in svcs:
+        b.button(text=f"{sname}", callback_data=f"sel_svc_{sid}")
+    b.adjust(2)
+    await state.update_data(svcs={sid: (sid, sname, price, mn, mx) for sid, sname, price, mn, mx in svcs})
     await state.set_state(US.select_service)
-    await msg.answer(lines, reply_markup=kb)
+    await msg.answer(lines, reply_markup=b.as_markup())
 
 @dp.message(US.select_service)
-async def sel_svc(msg: types.Message, state: FSMContext):
+async def sel_svc_msg(msg: types.Message, state: FSMContext):
+    # Agar foydalanuvchi matn yuborsа (orqaga)
     if msg.text == "◀️ Orqaga":
         await place_order(msg, state); return
-    data = await state.get_data()
-    svcs = data.get("svcs", {})
-    if msg.text not in svcs:
-        await msg.answer("❌ Noto'g'ri tanlov"); return
-    svc_id = svcs[msg.text]
+    await msg.answer("❌ Iltimos, yuqoridagi tugmalardan birini bosing.")
+
+@dp.callback_query(F.data.startswith("sel_svc_"))
+async def sel_svc(cb: types.CallbackQuery, state: FSMContext):
+    svc_id = int(cb.data.replace("sel_svc_",""))
     conn = db(); c = conn.cursor()
     c.execute("SELECT * FROM services WHERE id=?", (svc_id,))
     svc = c.fetchone(); conn.close()
+    if not svc:
+        await cb.answer("❌ Xizmat topilmadi", show_alert=True); return
     await state.update_data(svc=svc)
     await state.set_state(US.enter_link)
-    await msg.answer(
+    await cb.message.answer(
         f"📌 {svc[4]}\n💰 {svc[7]:.0f} {cur()}/1000\nMin:{svc[5]} Max:{svc[6]}\n\n🔗 Linkni kiriting:",
         reply_markup=cancel_kb()
     )
+    await cb.answer()
 
 @dp.message(US.enter_link)
 async def enter_link(msg: types.Message, state: FSMContext):
@@ -668,6 +714,7 @@ async def admin_settings(msg: types.Message):
         [KeyboardButton(text="💲 Valyuta o'zgartirish")],
         [KeyboardButton(text=f"🕐 Xizmat vaqti: {st_s}")],
         [KeyboardButton(text=f"✨ Premium emoji: {st_p}")],
+        [KeyboardButton(text="🤖 Bot hisobi")],
         [KeyboardButton(text="◀️ Orqaga")],
     ], resize_keyboard=True)
     await msg.answer(
@@ -722,6 +769,117 @@ async def toggle_premium(msg: types.Message):
     set_setting("premium_emoji", v)
     await msg.answer("✅ O'zgartirildi!"); await admin_settings(msg)
 
+# ── Bot hisobi ────────────────────────────────────────────
+@dp.message(F.text == "🤖 Bot hisobi")
+async def bot_account_menu(msg: types.Message, state: FSMContext):
+    if msg.from_user.id not in ADMIN_IDS: return
+    saved_token = get_setting("ext_bot_token", "")
+    saved_url   = get_setting("ext_bot_url",   "")
+    b = InlineKeyboardBuilder()
+    if saved_token:
+        b.button(text="🔄 Yangilash",       callback_data="bot_acc_update")
+        b.button(text="💰 Balansni ko'rish", callback_data="bot_acc_balance")
+        b.button(text="🗑 O'chirish",        callback_data="bot_acc_delete")
+        b.adjust(2)
+        await msg.answer(
+            f"🤖 Bot hisobi:\n\n"
+            f"🔑 Token: {saved_token[:20]}...\n"
+            f"🌐 URL: {saved_url or 'Kiritilmagan'}",
+            reply_markup=b.as_markup()
+        )
+    else:
+        b.button(text="➕ Bot API qo'shish", callback_data="bot_acc_add")
+        b.adjust(1)
+        await msg.answer("🤖 Bot hisobi ulangan emas.\nBoshqa botni API tokenini ulashing:", reply_markup=b.as_markup())
+
+@dp.callback_query(F.data.in_({"bot_acc_add", "bot_acc_update"}))
+async def bot_acc_add(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await state.set_state(AS.bot_api_token)
+    await cb.message.answer("🔑 Botning API tokenini kiriting\n(masalan: 123456:ABCdef...)", reply_markup=cancel_kb())
+    await cb.answer()
+
+@dp.message(AS.bot_api_token)
+async def bot_acc_token(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    await state.update_data(ext_token=msg.text.strip())
+    await state.set_state(AS.bot_api_url)
+    await msg.answer("🌐 SMM panel API URL ni kiriting\n(masalan: https://saleseen.uz/api/v2)\n\nAgar yo'q bo'lsa /skip yozing:")
+
+@dp.message(AS.bot_api_url)
+async def bot_acc_url(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    data = await state.get_data()
+    token = data["ext_token"]
+    url   = "" if msg.text.strip() == "/skip" else msg.text.strip()
+
+    # Tokenni tekshirish (botInfo olish)
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"https://api.telegram.org/bot{token}/getMe", timeout=aiohttp.ClientTimeout(total=8)) as r:
+                res = await r.json()
+        if not res.get("ok"):
+            await msg.answer(f"❌ Token noto'g'ri yoki bot topilmadi!\nXato: {res.get('description','')}"); await state.clear(); return
+        bot_info = res["result"]
+    except Exception as e:
+        await msg.answer(f"❌ Ulanib bo'lmadi: {e}"); await state.clear(); return
+
+    set_setting("ext_bot_token", token)
+    set_setting("ext_bot_url",   url)
+    await state.clear()
+    await msg.answer(
+        f"✅ Bot ulandi!\n\n"
+        f"🤖 @{bot_info.get('username','?')} — {bot_info.get('first_name','')}\n"
+        f"🆔 ID: {bot_info.get('id','?')}\n"
+        f"🌐 URL: {url or 'Kiritilmagan'}",
+        reply_markup=admin_kb()
+    )
+
+@dp.callback_query(F.data == "bot_acc_balance")
+async def bot_acc_balance(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    token = get_setting("ext_bot_token","")
+    url   = get_setting("ext_bot_url","")
+    if not token:
+        await cb.answer("❌ Bot ulanmagan!", show_alert=True); return
+    await cb.answer("⏳ Tekshirilmoqda...")
+
+    # Bot info
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"https://api.telegram.org/bot{token}/getMe", timeout=aiohttp.ClientTimeout(total=8)) as r:
+                bot_res = await r.json()
+        bot_name = bot_res.get("result",{}).get("username","?") if bot_res.get("ok") else "Noma'lum"
+    except:
+        bot_name = "Noma'lum"
+
+    # SMM Panel balansi
+    balance_text = "—"
+    if url:
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.post(url, data={"key": token, "action": "balance"}, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                    bal_res = await r.json(content_type=None)
+            balance_text = f"{bal_res.get('balance','?')} {bal_res.get('currency','')}"
+        except Exception as e:
+            balance_text = f"Xato: {e}"
+
+    await cb.message.answer(
+        f"🤖 @{bot_name}\n"
+        f"💰 Panel balansi: {balance_text}\n"
+        f"🌐 URL: {url or 'Kiritilmagan'}"
+    )
+
+@dp.callback_query(F.data == "bot_acc_delete")
+async def bot_acc_delete(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    set_setting("ext_bot_token", "")
+    set_setting("ext_bot_url",   "")
+    await cb.message.answer("✅ Bot hisobi o'chirildi!")
+    await cb.answer()
+
 # ── Statistika ─────────────────────────────────────────────
 @dp.message(F.text == "📊 Statistika")
 async def stat(msg: types.Message):
@@ -773,9 +931,50 @@ async def top_ref(cb: types.CallbackQuery):
 async def broadcast_menu(msg: types.Message):
     if msg.from_user.id not in ADMIN_IDS: return
     b = InlineKeyboardBuilder()
-    b.button(text="💬 Oddiy",   callback_data="bc_regular")
-    b.button(text="📨 Forward", callback_data="bc_forward")
-    await msg.answer("Foydalanuvchilarga yuboradigan xabar turini tanlang.", reply_markup=b.as_markup())
+    b.button(text="💬 Oddiy xabar (1 foydalanuvchi)", callback_data="bc_single")
+    b.button(text="📨 Forward (barchaga)",            callback_data="bc_forward_all")
+    b.adjust(1)
+    await msg.answer("Xabar yuborish turini tanlang:", reply_markup=b.as_markup())
+
+@dp.callback_query(F.data == "bc_forward_all")
+async def bc_forward_start(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await state.update_data(bc_type="forward")
+    await state.set_state(AS.broadcast_msg)
+    await cb.message.answer("📨 Forward qilinadigan xabarni yuboring:", reply_markup=cancel_kb())
+    await cb.answer()
+
+@dp.callback_query(F.data == "bc_single")
+async def bc_single_start(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await state.set_state(AS.broadcast_uid)
+    await cb.message.answer("🆔 Foydalanuvchi ID sini kiriting:", reply_markup=cancel_kb())
+    await cb.answer()
+
+@dp.message(AS.broadcast_uid)
+async def bc_single_uid(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    try:
+        uid = int(msg.text)
+    except:
+        await msg.answer("❌ Noto'g'ri ID, raqam kiriting:"); return
+    await state.update_data(single_uid=uid)
+    await state.set_state(AS.broadcast_uid_msg)
+    await msg.answer(f"✅ ID: {uid}\n\n📝 Xabar matnini kiriting:", reply_markup=cancel_kb())
+
+@dp.message(AS.broadcast_uid_msg)
+async def bc_single_send(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    data = await state.get_data()
+    uid  = data["single_uid"]
+    try:
+        await bot.send_message(uid, msg.text)
+        await msg.answer(f"✅ {uid} ga xabar yuborildi!", reply_markup=admin_kb())
+    except Exception as e:
+        await msg.answer(f"❌ Xabar yuborib bo'lmadi: {e}", reply_markup=admin_kb())
+    await state.clear()
 
 @dp.callback_query(F.data.startswith("bc_"))
 async def bc_type(cb: types.CallbackQuery, state: FSMContext):
@@ -898,10 +1097,91 @@ async def auto_pay(msg: types.Message):
 @dp.message(F.text == "📝 Oddiy to'lov tizimlari")
 async def manual_pay(msg: types.Message):
     if msg.from_user.id not in ADMIN_IDS: return
-    u = "✅" if get_setting("uzcart_active")=="1" else "❌"
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT id,name,card_number,card_holder FROM manual_payments WHERE is_active=1")
+    pays = c.fetchall(); conn.close()
     b = InlineKeyboardBuilder()
-    b.button(text=f"{u} Uzcart", callback_data="tg_uzcart")
-    await msg.answer("📝 Oddiy to'lov tizimlari:", reply_markup=b.as_markup())
+    for pid, pname, pcard, pholder in pays:
+        b.button(text=f"💳 {pname} — {pcard}", callback_data=f"mpay_del_{pid}")
+    b.button(text="➕ To'lov tizimi qo'shish", callback_data="mpay_add")
+    b.adjust(1)
+    text = f"📝 Oddiy to'lov tizimlari: {len(pays)} ta\n\n"
+    for pid, pname, pcard, pholder in pays:
+        text += f"• {pname}: {pcard} ({pholder})\n"
+    await msg.answer(text or "📝 Oddiy to'lov tizimlari:", reply_markup=b.as_markup())
+
+@dp.callback_query(F.data == "mpay_add")
+async def mpay_add_start(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await state.set_state(AS.mpay_name)
+    await cb.message.answer("💳 To'lov tizimi nomini kiriting:\n(masalan: Humo, Uzcard, Visa)", reply_markup=cancel_kb())
+    await cb.answer()
+
+@dp.message(AS.mpay_name)
+async def mpay_name_h(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    await state.update_data(mpay_name=msg.text)
+    await state.set_state(AS.mpay_card)
+    await msg.answer("💳 Karta raqamini kiriting:\n(masalan: 8600 1234 5678 9012)")
+
+@dp.message(AS.mpay_card)
+async def mpay_card_h(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    await state.update_data(mpay_card=msg.text.strip())
+    await state.set_state(AS.mpay_expiry)
+    await msg.answer("📅 Karta muddatini kiriting:\n(masalan: 12/27)")
+
+@dp.message(AS.mpay_expiry)
+async def mpay_expiry_h(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    await state.update_data(mpay_expiry=msg.text.strip())
+    await state.set_state(AS.mpay_holder)
+    await msg.answer("👤 Karta egasining to'liq ism-familiyasini kiriting:\n(masalan: Abdullayev Jahongir)")
+
+@dp.message(AS.mpay_holder)
+async def mpay_holder_h(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    data = await state.get_data()
+    conn = db(); c = conn.cursor()
+    c.execute("INSERT INTO manual_payments(name,card_number,card_expiry,card_holder) VALUES(?,?,?,?)",
+              (data["mpay_name"], data["mpay_card"], data["mpay_expiry"], msg.text.strip()))
+    conn.commit(); conn.close()
+    await state.clear()
+    await msg.answer(
+        f"✅ To'lov tizimi qo'shildi!\n\n"
+        f"💳 Nomi: {data['mpay_name']}\n"
+        f"🔢 Karta: {data['mpay_card']}\n"
+        f"📅 Muddat: {data['mpay_expiry']}\n"
+        f"👤 Egasi: {msg.text.strip()}",
+        reply_markup=admin_kb()
+    )
+
+@dp.callback_query(F.data.startswith("mpay_del_"))
+async def mpay_del(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    pid = int(cb.data.replace("mpay_del_",""))
+    b = InlineKeyboardBuilder()
+    b.button(text="🗑 Ha, o'chirish", callback_data=f"mpay_confirm_del_{pid}")
+    b.button(text="❌ Bekor",         callback_data="mpay_cancel")
+    b.adjust(2)
+    await cb.message.answer("⚠️ Bu to'lov tizimini o'chirmoqchimisiz?", reply_markup=b.as_markup())
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("mpay_confirm_del_"))
+async def mpay_confirm_del(cb: types.CallbackQuery):
+    pid = int(cb.data.replace("mpay_confirm_del_",""))
+    conn = db(); c = conn.cursor()
+    c.execute("DELETE FROM manual_payments WHERE id=?", (pid,))
+    conn.commit(); conn.close()
+    await cb.message.answer("✅ To'lov tizimi o'chirildi!"); await cb.answer()
+
+@dp.callback_query(F.data == "mpay_cancel")
+async def mpay_cancel(cb: types.CallbackQuery):
+    await cb.answer("Bekor qilindi")
 
 @dp.callback_query(F.data.startswith("tg_"))
 async def toggle_pay(cb: types.CallbackQuery):
