@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # ============================================================
 #  ⚙️  SOZLAMALAR  –  shu qatorlarni o'zgartiring
 # ============================================================
-BOT_TOKEN  = "YOUR_BOT_TOKEN_HERE"       # @BotFather dan oling
-ADMIN_IDS  = [123456789]                 # O'z Telegram ID-ingizni yozing
+BOT_TOKEN  = "8648355597:AAF_eM_GHY3SmBpHB4VSuK93O-o_pUXdgFg"       # @BotFather dan oling
+ADMIN_IDS  = [8537782289]                 # O'z Telegram ID-ingizni yozing
 # ============================================================
 
 DB = "smm_bot.db"
