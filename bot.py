@@ -511,12 +511,12 @@ async def place_order(msg: types.Message, state: FSMContext):
     if not cats:
         await msg.answer("❌ Hozirda xizmatlar mavjud emas."); return
 
-    # Bo'limlarni inline keyboard sifatida ko'rsatish
+    # Bo'limlarni 2 ta qatorda, emojisiz ko'rsatish
     b = InlineKeyboardBuilder()
     for cid, name in cats:
-        b.button(text=f"📁 {name}", callback_data=f"order_cat_{cid}")
+        b.button(text=name, callback_data=f"order_cat_{cid}")
     b.button(text="◀️ Orqaga", callback_data="order_back_main")
-    b.adjust(1)
+    b.adjust(2)
 
     await state.set_state(US.select_category)
     await state.update_data(cats={str(cid): name for cid, name in cats})
@@ -575,9 +575,9 @@ async def back_to_cats(cb: types.CallbackQuery, state: FSMContext):
 
     b = InlineKeyboardBuilder()
     for cid, name in cats:
-        b.button(text=f"📁 {name}", callback_data=f"order_cat_{cid}")
+        b.button(text=name, callback_data=f"order_cat_{cid}")
     b.button(text="◀️ Orqaga", callback_data="order_back_main")
-    b.adjust(1)
+    b.adjust(2)
 
     await state.set_state(US.select_category)
     await state.update_data(cats={str(cid): name for cid, name in cats})
@@ -655,6 +655,7 @@ async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
     c.execute("UPDATE users SET balance=balance-? WHERE user_id=?", (amount, uid))
 
     api_order_id = None
+    api_error    = None
     if svc[2]:
         c.execute("SELECT url,api_key FROM apis WHERE id=?", (svc[2],))
         api = c.fetchone()
@@ -662,6 +663,8 @@ async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
             res = await api_order(api[0], api[1], svc[3], link, qty)
             if res and "order" in res:
                 api_order_id = str(res["order"])
+            elif res and "error" in res:
+                api_error = res["error"]
 
     c.execute("INSERT INTO orders(user_id,service_id,api_order_id,link,quantity,amount,status) VALUES(?,?,?,?,?,?,?)",
               (uid, svc[0], api_order_id, link, qty, amount, "pending"))
@@ -670,11 +673,28 @@ async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
               (uid, -amount, "order", f"Buyurtma #{order_id}"))
     conn.commit(); conn.close()
 
-    await state.clear()
-    await cb.message.answer(
-        f"✅ Buyurtma qabul qilindi! #{order_id}\n💰 {amount:.0f} {cur()} yechildi.",
-        reply_markup=main_kb(uid in ADMIN_IDS)
+    # Yangi balansni olish
+    u = get_user(uid)
+    new_balance = u[3] if u else 0
+
+    result_text = (
+        f"✅ Buyurtma muvaffaqiyatli yuborildi!\n\n"
+        f"🆔 Buyurtma raqami: #{order_id}\n"
+        f"📌 Xizmat: {svc[4]}\n"
+        f"🔢 Xizmat ID: {svc[3]}\n"
+        f"📊 Miqdor: {qty}\n"
+        f"🔗 Link: {link}\n"
+        f"💰 Yechildi: {amount:.0f} {cur()}\n"
+        f"💵 Qolgan balans: {new_balance:.0f} {cur()}\n"
     )
+    if api_order_id:
+        result_text += f"📡 API buyurtma ID: {api_order_id}\n"
+    if api_error:
+        result_text += f"⚠️ API xato: {api_error}\n"
+    result_text += f"\n⏳ Xizmat bajarilmoqda..."
+
+    await state.clear()
+    await cb.message.answer(result_text, reply_markup=main_kb(uid in ADMIN_IDS))
     await cb.answer()
 
 @dp.callback_query(F.data == "order_no")
@@ -1599,7 +1619,7 @@ async def cat_menu(msg: types.Message):
         status = "✅" if cact else "❌"
         b.button(text=f"{status} {cname}", callback_data=f"cat_{cid}")
     b.button(text="➕ Bo'lim qo'shish", callback_data="cat_add")
-    b.adjust(1)
+    b.adjust(2)
     await msg.answer(f"📂 Bo'limlar: {len(cats)} ta", reply_markup=b.as_markup())
 
 @dp.callback_query(F.data == "cat_add")
@@ -1640,7 +1660,9 @@ async def cat_detail(cb: types.CallbackQuery):
     b.button(text="🗑 Bo'limni o'chirish",  callback_data=f"cat_del_{cid}")
     b.adjust(2)
     await cb.message.answer(
-        f"📂 {cat[1]}\nHolat: {status}\nXizmatlar: {ns} ta",
+        f"📂 {cat[1]}\n"
+        f"Holat: {status}\n"
+        f"Xizmatlar: {ns} ta",
         reply_markup=b.as_markup()
     )
     await cb.answer()
@@ -1771,17 +1793,36 @@ async def svc_add_price(msg: types.Message, state: FSMContext):
     try:    price = float(msg.text) if msg.text != "/skip" else prefill.get("price", 0)
     except: price = prefill.get("price", 0)
 
+    cat_id = data["new_svc_cat"]
+
     conn = db(); c = conn.cursor()
     c.execute("""INSERT INTO services(category_id,api_id,api_service_id,name,min_qty,max_qty,price_per1000)
                  VALUES(?,?,?,?,?,?,?)""",
-              (data["new_svc_cat"], data["new_svc_api"], data["new_svc_api_id"],
+              (cat_id, data["new_svc_api"], data["new_svc_api_id"],
                data["new_svc_name"], data["new_svc_min"], data["new_svc_max"], price))
+    # yangi qo'shilgan xizmat sonini olish
+    c.execute("SELECT COUNT(*) FROM services WHERE category_id=?", (cat_id,))
+    svc_count = c.fetchone()[0]
+    c.execute("SELECT name FROM categories WHERE id=?", (cat_id,))
+    cat_row = c.fetchone()
     conn.commit(); conn.close()
+
+    cat_name = cat_row[0] if cat_row else "Bo'lim"
+
+    # Xizmat qo'shilgandan keyin yana qo'shish tugmasi
+    b = InlineKeyboardBuilder()
+    b.button(text="➕ Yana xizmat qo'shish", callback_data=f"cat_svc_add_{cat_id}")
+    b.button(text="📋 Xizmatlar ro'yhati",   callback_data=f"cat_svcs_{cat_id}")
+    b.adjust(2)
+
     await state.clear()
     await msg.answer(
-        f"✅ Xizmat qo'shildi!\n📌 {data['new_svc_name']}\n"
-        f"💰 {price:.0f} {cur()}/1000 | Min:{data['new_svc_min']} Max:{data['new_svc_max']}",
-        reply_markup=admin_kb()
+        f"✅ Xizmat qo'shildi!\n\n"
+        f"📌 {data['new_svc_name']}\n"
+        f"💰 {price:.0f} {cur()}/1000\n"
+        f"📊 Min: {data['new_svc_min']}  |  Max: {data['new_svc_max']}\n"
+        f"📁 Bo'lim: {cat_name}  ({svc_count} ta xizmat)",
+        reply_markup=b.as_markup()
     )
 
 # ── Bo'limdagi xizmatlar ────────────────────────────────────
