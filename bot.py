@@ -17,6 +17,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardRemove,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -204,7 +205,7 @@ class AS(StatesGroup):          # Admin States
     api_url            = State()
     api_key            = State()
     api_price          = State()
-    svc_api_id         = State()   # API service ID kiritish
+    svc_api_id         = State()
     svc_name           = State()
     svc_min            = State()
     svc_max            = State()
@@ -212,8 +213,8 @@ class AS(StatesGroup):          # Admin States
     set_referral       = State()
     set_currency       = State()
     broadcast_msg      = State()
-    broadcast_uid      = State()   # Oddiy xabar: foydalanuvchi ID
-    broadcast_uid_msg  = State()   # Oddiy xabar: xabar matni
+    broadcast_uid      = State()
+    broadcast_uid_msg  = State()
     user_id_input      = State()
     balance_amount     = State()
     # Manual payment
@@ -221,7 +222,7 @@ class AS(StatesGroup):          # Admin States
     mpay_card          = State()
     mpay_expiry        = State()
     mpay_holder        = State()
-    # Bot account (boshqa botni APIsi)
+    # Bot account
     bot_api_token      = State()
     bot_api_url        = State()
     add_channel        = State()
@@ -284,14 +285,12 @@ async def api_order(url, key, service_id, link, qty):
         return None
 
 async def api_balance(url, key):
-    """API hisobidagi balansni olish"""
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(url, data={"key": key, "action": "balance"},
                               timeout=aiohttp.ClientTimeout(total=10)) as r:
                 data = await r.json(content_type=None)
                 if isinstance(data, dict):
-                    # Turli API formatlarini qo'llab-quvvatlash
                     bal = data.get("balance", data.get("funds", data.get("Balance", None)))
                     cur_val = data.get("currency", data.get("Currency", "USD"))
                     if bal is not None:
@@ -407,7 +406,6 @@ async def topup(msg: types.Message):
     b = InlineKeyboardBuilder()
     if get_setting("payme_active") == "1" or get_setting("click_active") == "1":
         b.button(text="💠 Avto-to'lov (Payme, Click)", callback_data="pay_auto")
-    # Manual payment tizimlari
     conn = db(); c = conn.cursor()
     c.execute("SELECT id,name FROM manual_payments WHERE is_active=1")
     mpays = c.fetchall(); conn.close()
@@ -456,7 +454,6 @@ async def do_topup(msg: types.Message, state: FSMContext):
     except:
         await msg.answer("❌ Minimal miqdor 1000 Sum"); return
 
-    # Real loyihada to'lov tizimi bilan integratsiya qilish kerak
     b = InlineKeyboardBuilder()
     b.button(text="✅ To'lovni tasdiqlash (test)", callback_data=f"confirm_pay_{amount}")
     await msg.answer(
@@ -504,7 +501,7 @@ async def my_orders(msg: types.Message):
     )
 
 # ═══════════════════════════════════════════════════════════
-#  USER — Buyurtma berish
+#  USER — Buyurtma berish  ← TUZATILGAN QISM
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "Buyurtma berish")
 async def place_order(msg: types.Message, state: FSMContext):
@@ -513,46 +510,78 @@ async def place_order(msg: types.Message, state: FSMContext):
     cats = c.fetchall(); conn.close()
     if not cats:
         await msg.answer("❌ Hozirda xizmatlar mavjud emas."); return
-    kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=name)] for _,name in cats] + [[KeyboardButton(text="◀️ Orqaga")]],
-        resize_keyboard=True
-    )
-    await state.set_state(US.select_category)
-    await state.update_data(cats={name: cid for cid, name in cats})
-    await msg.answer("📁 Bo'limni tanlang:", reply_markup=kb)
 
-@dp.message(US.select_category)
-async def sel_cat(msg: types.Message, state: FSMContext):
-    if msg.text == "◀️ Orqaga":
-        await state.clear()
-        await msg.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)); return
-    data = await state.get_data()
-    cats = data.get("cats", {})
-    if msg.text not in cats:
-        await msg.answer("❌ Noto'g'ri tanlov"); return
-    cat_id = cats[msg.text]
+    # Bo'limlarni inline keyboard sifatida ko'rsatish
+    b = InlineKeyboardBuilder()
+    for cid, name in cats:
+        b.button(text=f"📁 {name}", callback_data=f"order_cat_{cid}")
+    b.button(text="◀️ Orqaga", callback_data="order_back_main")
+    b.adjust(1)
+
+    await state.set_state(US.select_category)
+    await state.update_data(cats={str(cid): name for cid, name in cats})
+
+    # Reply keyboard olib tashlash va inline ko'rsatish
+    await msg.answer(".", reply_markup=ReplyKeyboardRemove())
+    await msg.answer("📁 Bo'limni tanlang:", reply_markup=b.as_markup())
+
+@dp.callback_query(F.data == "order_back_main")
+async def order_back_main(cb: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.message.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(cb.from_user.id in ADMIN_IDS))
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("order_cat_"))
+async def order_cat_selected(cb: types.CallbackQuery, state: FSMContext):
+    cat_id = int(cb.data.replace("order_cat_", ""))
     conn = db(); c = conn.cursor()
     c.execute("SELECT id,name,price_per1000,min_qty,max_qty FROM services WHERE category_id=? AND is_active=1", (cat_id,))
-    svcs = c.fetchall(); conn.close()
+    svcs = c.fetchall()
+    c.execute("SELECT name FROM categories WHERE id=?", (cat_id,))
+    cat_name_row = c.fetchone()
+    conn.close()
+
+    cat_name = cat_name_row[0] if cat_name_row else "Bo'lim"
+
     if not svcs:
-        await msg.answer("❌ Bu bo'limda xizmatlar yo'q."); return
-    lines = f"📋 {msg.text} — xizmatlarni tanlang:\n\n"
+        await cb.answer("❌ Bu bo'limda xizmatlar yo'q.", show_alert=True); return
+
+    lines = f"📋 {cat_name} — xizmatlarni tanlang:\n\n"
     for sid, sname, price, mn, mx in svcs:
         lines += f"• {sname}\n  💰 {price:.0f} {cur()}/1000 | Min:{mn}–{mx}\n\n"
+
     b = InlineKeyboardBuilder()
     for sid, sname, price, mn, mx in svcs:
-        b.button(text=f"{sname}", callback_data=f"sel_svc_{sid}")
+        b.button(text=sname, callback_data=f"sel_svc_{sid}")
+    b.button(text="◀️ Orqaga", callback_data="back_to_cats")
     b.adjust(2)
-    await state.update_data(svcs={sid: (sid, sname, price, mn, mx) for sid, sname, price, mn, mx in svcs})
-    await state.set_state(US.select_service)
-    await msg.answer(lines, reply_markup=b.as_markup())
 
-@dp.message(US.select_service)
-async def sel_svc_msg(msg: types.Message, state: FSMContext):
-    # Agar foydalanuvchi matn yuborsа (orqaga)
-    if msg.text == "◀️ Orqaga":
-        await place_order(msg, state); return
-    await msg.answer("❌ Iltimos, yuqoridagi tugmalardan birini bosing.")
+    await state.update_data(
+        svcs={sid: (sid, sname, price, mn, mx) for sid, sname, price, mn, mx in svcs},
+        last_cat_id=cat_id
+    )
+    await state.set_state(US.select_service)
+    await cb.message.answer(lines, reply_markup=b.as_markup())
+    await cb.answer()
+
+@dp.callback_query(F.data == "back_to_cats")
+async def back_to_cats(cb: types.CallbackQuery, state: FSMContext):
+    await cb.answer()
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT id,name FROM categories WHERE is_active=1")
+    cats = c.fetchall(); conn.close()
+    if not cats:
+        await cb.message.answer("❌ Hozirda xizmatlar mavjud emas."); return
+
+    b = InlineKeyboardBuilder()
+    for cid, name in cats:
+        b.button(text=f"📁 {name}", callback_data=f"order_cat_{cid}")
+    b.button(text="◀️ Orqaga", callback_data="order_back_main")
+    b.adjust(1)
+
+    await state.set_state(US.select_category)
+    await state.update_data(cats={str(cid): name for cid, name in cats})
+    await cb.message.answer("📁 Bo'limni tanlang:", reply_markup=b.as_markup())
 
 @dp.callback_query(F.data.startswith("sel_svc_"))
 async def sel_svc(cb: types.CallbackQuery, state: FSMContext):
@@ -626,7 +655,7 @@ async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
     c.execute("UPDATE users SET balance=balance-? WHERE user_id=?", (amount, uid))
 
     api_order_id = None
-    if svc[2]:  # api_id
+    if svc[2]:
         c.execute("SELECT url,api_key FROM apis WHERE id=?", (svc[2],))
         api = c.fetchone()
         if api:
@@ -777,7 +806,6 @@ async def cb_tog_svctime(cb: types.CallbackQuery):
     v = "0" if get_setting("service_time","1")=="1" else "1"
     set_setting("service_time", v)
     await cb.answer("✅ O'zgartirildi!")
-    # Xabarni yangilash
     rb   = get_setting("referral_bonus","2500")
     cv   = get_setting("currency","Sum")
     st_s = "✅ Faol" if v=="1" else "❌ Nofaol"
@@ -881,7 +909,6 @@ async def bot_acc_url(msg: types.Message, state: FSMContext):
     token = data["ext_token"]
     url   = "" if msg.text.strip() == "/skip" else msg.text.strip()
 
-    # Tokenni tekshirish (botInfo olish)
     try:
         async with aiohttp.ClientSession() as s:
             async with s.get(f"https://api.telegram.org/bot{token}/getMe", timeout=aiohttp.ClientTimeout(total=8)) as r:
@@ -912,7 +939,6 @@ async def bot_acc_balance(cb: types.CallbackQuery):
         await cb.answer("❌ Bot ulanmagan!", show_alert=True); return
     await cb.answer("⏳ Tekshirilmoqda...")
 
-    # Bot info
     try:
         async with aiohttp.ClientSession() as s:
             async with s.get(f"https://api.telegram.org/bot{token}/getMe", timeout=aiohttp.ClientTimeout(total=8)) as r:
@@ -921,7 +947,6 @@ async def bot_acc_balance(cb: types.CallbackQuery):
     except:
         bot_name = "Noma'lum"
 
-    # SMM Panel balansi
     balance_text = "—"
     if url:
         try:
@@ -1310,14 +1335,12 @@ async def api_key_h(msg: types.Message, state: FSMContext):
     data    = await state.get_data()
     url     = data["api_url"]
 
-    # URL dan nom olish (masalan: saleseen.uz)
     try:
         from urllib.parse import urlparse
         auto_name = urlparse(url).netloc.replace("www.", "")
     except:
         auto_name = url[:30]
 
-    # Balansni API dan olish
     balance, api_cur = await api_balance(url, api_key)
 
     conn = db(); c = conn.cursor()
@@ -1346,7 +1369,6 @@ async def api_detail(cb: types.CallbackQuery):
     api  = c.fetchone(); conn.close()
     if not api: await cb.answer("❌ Topilmadi"); return
     await cb.answer("⏳ Balans tekshirilmoqda...")
-    # Balansni olish
     balance, api_cur = await api_balance(api[2], api[3])
     bal_text = f"\n💵 Balans: {balance:.2f} {api_cur}" if balance is not None else "\n💵 Balans: aniqlanmadi"
     b = InlineKeyboardBuilder()
@@ -1428,6 +1450,14 @@ async def u_sub(cb: types.CallbackQuery, state: FSMContext):
     await state.update_data(target_uid=uid, bal_action="sub")
     await state.set_state(AS.balance_amount)
     await cb.message.answer("💰 Ayirmoqchi bo'lgan miqdor:", reply_markup=cancel_kb())
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("umsg_"))
+async def u_msg(cb: types.CallbackQuery, state: FSMContext):
+    uid = int(cb.data.replace("umsg_",""))
+    await state.update_data(single_uid=uid)
+    await state.set_state(AS.broadcast_uid_msg)
+    await cb.message.answer(f"📝 {uid} ga xabar matnini kiriting:", reply_markup=cancel_kb())
     await cb.answer()
 
 @dp.message(AS.balance_amount)
@@ -1634,7 +1664,7 @@ async def cat_del(cb: types.CallbackQuery):
     conn.commit(); conn.close()
     await cb.message.answer("✅ Bo'lim o'chirildi!"); await cb.answer()
 
-# ── Xizmat qo'shish (Admin → Bo'lim → API → API Service ID → ...) ──
+# ── Xizmat qo'shish ──────────────────────────────────────
 @dp.callback_query(F.data.startswith("cat_svc_add_"))
 async def svc_add_step1(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
@@ -1673,7 +1703,6 @@ async def svc_add_step3(msg: types.Message, state: FSMContext):
     data   = await state.get_data()
     api_id = data["new_svc_api"]
 
-    # Try to auto-fill from API
     conn = db(); c = conn.cursor()
     c.execute("SELECT url,api_key FROM apis WHERE id=?", (api_id,))
     api  = c.fetchone(); conn.close()
