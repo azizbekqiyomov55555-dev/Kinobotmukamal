@@ -1640,10 +1640,20 @@ async def do_cat_add(msg: types.Message, state: FSMContext):
     await msg.answer(f"✅ '{msg.text}' bo'limi qo'shildi!")
     await cat_menu(msg)
 
-@dp.callback_query(F.data.startswith("cat_") & ~F.data.startswith("cat_add"))
+@dp.callback_query(
+    F.data.startswith("cat_") &
+    ~F.data.startswith("cat_add") &
+    ~F.data.startswith("cat_tog_") &
+    ~F.data.startswith("cat_del_") &
+    ~F.data.startswith("cat_svc_add_") &
+    ~F.data.startswith("cat_svcs_")
+)
 async def cat_detail(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
-    cid  = int(cb.data.replace("cat_",""))
+    try:
+        cid = int(cb.data.replace("cat_",""))
+    except ValueError:
+        await cb.answer(); return
     conn = db(); c = conn.cursor()
     c.execute("SELECT id,name,is_active FROM categories WHERE id=?", (cid,))
     cat  = c.fetchone()
@@ -1659,12 +1669,11 @@ async def cat_detail(cb: types.CallbackQuery):
     b.button(text="📋 Xizmatlar ro'yhati", callback_data=f"cat_svcs_{cid}")
     b.button(text="🗑 Bo'limni o'chirish",  callback_data=f"cat_del_{cid}")
     b.adjust(2)
-    await cb.message.answer(
-        f"📂 {cat[1]}\n"
-        f"Holat: {status}\n"
-        f"Xizmatlar: {ns} ta",
-        reply_markup=b.as_markup()
-    )
+    text = f"📂 {cat[1]}\nHolat: {status}\nXizmatlar: {ns} ta"
+    try:
+        await cb.message.edit_text(text, reply_markup=b.as_markup())
+    except Exception:
+        await cb.message.answer(text, reply_markup=b.as_markup())
     await cb.answer()
 
 @dp.callback_query(F.data.startswith("cat_tog_"))
@@ -1673,8 +1682,28 @@ async def cat_toggle(cb: types.CallbackQuery):
     conn = db(); c = conn.cursor()
     c.execute("SELECT is_active FROM categories WHERE id=?", (cid,))
     cur_val = c.fetchone()[0]
-    c.execute("UPDATE categories SET is_active=? WHERE id=?", (0 if cur_val else 1, cid))
+    new_val = 0 if cur_val else 1
+    c.execute("UPDATE categories SET is_active=? WHERE id=?", (new_val, cid))
+    c.execute("SELECT name FROM categories WHERE id=?", (cid,))
+    cat_name = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM services WHERE category_id=?", (cid,))
+    ns = c.fetchone()[0]
     conn.commit(); conn.close()
+    status = "✅ Faol" if new_val else "❌ Nofaol"
+    b = InlineKeyboardBuilder()
+    toggle = "❌ O'chirish" if new_val else "✅ Faollashtirish"
+    b.button(text=toggle,                  callback_data=f"cat_tog_{cid}")
+    b.button(text="➕ Xizmat qo'shish",    callback_data=f"cat_svc_add_{cid}")
+    b.button(text="📋 Xizmatlar ro'yhati", callback_data=f"cat_svcs_{cid}")
+    b.button(text="🗑 Bo'limni o'chirish",  callback_data=f"cat_del_{cid}")
+    b.adjust(2)
+    try:
+        await cb.message.edit_text(
+            f"📂 {cat_name}\nHolat: {status}\nXizmatlar: {ns} ta",
+            reply_markup=b.as_markup()
+        )
+    except Exception:
+        pass
     await cb.answer("✅ O'zgartirildi!")
 
 @dp.callback_query(F.data.startswith("cat_del_"))
@@ -1684,7 +1713,11 @@ async def cat_del(cb: types.CallbackQuery):
     c.execute("DELETE FROM categories WHERE id=?", (cid,))
     c.execute("DELETE FROM services WHERE category_id=?", (cid,))
     conn.commit(); conn.close()
-    await cb.message.answer("✅ Bo'lim o'chirildi!"); await cb.answer()
+    try:
+        await cb.message.edit_text("✅ Bo'lim o'chirildi!", reply_markup=None)
+    except Exception:
+        await cb.message.answer("✅ Bo'lim o'chirildi!")
+    await cb.answer()
 
 # ── Xizmat qo'shish ──────────────────────────────────────
 @dp.callback_query(F.data.startswith("cat_svc_add_"))
@@ -1701,7 +1734,10 @@ async def svc_add_step1(cb: types.CallbackQuery, state: FSMContext):
     for aid, aname in apis:
         b.button(text=f"🔑 {aname}", callback_data=f"svc_api_{aid}")
     b.adjust(1)
-    await cb.message.answer("🔑 API tanlang:", reply_markup=b.as_markup())
+    try:
+        await cb.message.edit_text("🔑 API tanlang:", reply_markup=b.as_markup())
+    except Exception:
+        await cb.message.answer("🔑 API tanlang:", reply_markup=b.as_markup())
     await cb.answer()
 
 @dp.callback_query(F.data.startswith("svc_api_"))
@@ -1709,17 +1745,22 @@ async def svc_add_step2(cb: types.CallbackQuery, state: FSMContext):
     api_id = int(cb.data.replace("svc_api_",""))
     await state.update_data(new_svc_api=api_id)
     await state.set_state(AS.svc_api_id)
-    await cb.message.answer(
+    text = (
         "🔢 API xizmat ID sini kiriting:\n\n"
-        "💡 ID ni bilish uchun: Admin panel → API → Xizmatlarni yuklash",
-        reply_markup=cancel_kb()
+        "💡 Misol: 1, 15, 234 ...\n"
+        "📋 ID ni bilish uchun: Admin → API → Xizmatlarni ko'rish"
     )
+    try:
+        await cb.message.edit_text(text, reply_markup=None)
+    except Exception:
+        await cb.message.answer(text, reply_markup=cancel_kb())
     await cb.answer()
 
 @dp.message(AS.svc_api_id)
 async def svc_add_step3(msg: types.Message, state: FSMContext):
     if msg.text == "❌ Bekor qilish":
         await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+
     api_svc_id = msg.text.strip()
     await state.update_data(new_svc_api_id=api_svc_id)
     data   = await state.get_data()
@@ -1731,29 +1772,108 @@ async def svc_add_step3(msg: types.Message, state: FSMContext):
 
     prefill = {}
     if api:
+        wait_msg = await msg.answer("⏳ API dan xizmat qidirilmoqda...")
         svcs = await api_services(api[0], api[1])
+        try: await wait_msg.delete()
+        except: pass
         if svcs:
             for s in svcs:
                 if str(s.get("service", s.get("id",""))) == api_svc_id:
                     prefill = {
-                        "name":  s.get("name",""),
-                        "min":   int(s.get("min",100)),
-                        "max":   int(s.get("max",10000)),
-                        "price": round(float(s.get("rate",0)) * 1000, 2)
+                        "name":     s.get("name",""),
+                        "category": s.get("category",""),
+                        "type":     s.get("type",""),
+                        "min":      int(s.get("min", 100)),
+                        "max":      int(s.get("max", 10000)),
+                        "price":    round(float(s.get("rate", 0)) * 1000, 2),
+                        "refill":   s.get("refill", False),
+                        "cancel":   s.get("cancel", False),
                     }
                     break
 
     await state.update_data(prefill=prefill)
-    await state.set_state(AS.svc_name)
 
     if prefill:
+        # Avtomatik to'ldirilgan — tasdiqlash tugmalari
+        b = InlineKeyboardBuilder()
+        b.button(text="✅ Shunday saqlash",    callback_data="svc_confirm_auto")
+        b.button(text="✏️ Nomni o'zgartirish", callback_data="svc_edit_name")
+        b.adjust(1)
+        refill_txt = "Ha" if prefill['refill'] else "Yoq"
+        cancel_txt = "Ha" if prefill['cancel'] else "Yoq"
         await msg.answer(
-            f"✅ Xizmat topildi:\n📌 {prefill['name']}\n"
-            f"Min:{prefill['min']} Max:{prefill['max']} Narx:{prefill['price']}/1000\n\n"
-            f"Bot uchun nomini kiriting (yoki /skip — avtomatik nom):"
+            f"✅ Xizmat topildi!\n\n"
+            f"📌 Nomi: {prefill['name']}\n"
+            f"📁 Kategoriya: {prefill.get('category','—')}\n"
+            f"🔖 Turi: {prefill.get('type','—')}\n"
+            f"📊 Min: {prefill['min']}  |  Max: {prefill['max']}\n"
+            f"💰 Narx: {prefill['price']:.2f} {cur()}/1000\n"
+            f"🔄 Refill: {refill_txt}  |  ❌ Cancel: {cancel_txt}\n\n"
+            f"Quyidagilardan birini tanlang:",
+            reply_markup=b.as_markup()
         )
     else:
-        await msg.answer("📌 Xizmat nomini kiriting:")
+        await state.set_state(AS.svc_name)
+        await msg.answer(
+            f"⚠️ ID <b>{api_svc_id}</b> topilmadi yoki API ulanmadi.\n\n"
+            f"📌 Xizmat nomini qo'lda kiriting:",
+            parse_mode="HTML",
+            reply_markup=cancel_kb()
+        )
+
+@dp.callback_query(F.data == "svc_confirm_auto")
+async def svc_confirm_auto(cb: types.CallbackQuery, state: FSMContext):
+    """Avtomatik to'ldirilgan ma'lumotlar bilan saqlash"""
+    data    = await state.get_data()
+    prefill = data.get("prefill", {})
+    cat_id  = data["new_svc_cat"]
+
+    conn = db(); c = conn.cursor()
+    c.execute("""INSERT INTO services(category_id,api_id,api_service_id,name,min_qty,max_qty,price_per1000)
+                 VALUES(?,?,?,?,?,?,?)""",
+              (cat_id, data["new_svc_api"], data["new_svc_api_id"],
+               prefill["name"], prefill["min"], prefill["max"], prefill["price"]))
+    c.execute("SELECT COUNT(*) FROM services WHERE category_id=?", (cat_id,))
+    svc_count = c.fetchone()[0]
+    c.execute("SELECT name FROM categories WHERE id=?", (cat_id,))
+    cat_row = c.fetchone()
+    conn.commit(); conn.close()
+
+    cat_name = cat_row[0] if cat_row else "Bo'lim"
+
+    b = InlineKeyboardBuilder()
+    b.button(text="➕ Yana xizmat qo'shish", callback_data=f"cat_svc_add_{cat_id}")
+    b.button(text="📋 Xizmatlar ro'yhati",   callback_data=f"cat_svcs_{cat_id}")
+    b.adjust(2)
+
+    await state.clear()
+    try:
+        await cb.message.edit_text(
+            f"✅ Xizmat saqlandi!\n\n"
+            f"📌 {prefill['name']}\n"
+            f"💰 {prefill['price']:.2f} {cur()}/1000\n"
+            f"📊 Min: {prefill['min']}  |  Max: {prefill['max']}\n"
+            f"📁 {cat_name}  ({svc_count} ta xizmat)",
+            reply_markup=b.as_markup()
+        )
+    except Exception:
+        await cb.message.answer(
+            f"✅ Xizmat saqlandi!\n\n📌 {prefill['name']}\n"
+            f"💰 {prefill['price']:.2f} {cur()}/1000\n"
+            f"📁 {cat_name}  ({svc_count} ta xizmat)",
+            reply_markup=b.as_markup()
+        )
+    await cb.answer()
+
+@dp.callback_query(F.data == "svc_edit_name")
+async def svc_edit_name(cb: types.CallbackQuery, state: FSMContext):
+    """Nomni o'zgartirish uchun"""
+    await state.set_state(AS.svc_name)
+    try:
+        await cb.message.edit_text("📌 Yangi nom kiriting:", reply_markup=None)
+    except Exception:
+        await cb.message.answer("📌 Yangi nom kiriting:", reply_markup=cancel_kb())
+    await cb.answer()
 
 @dp.message(AS.svc_name)
 async def svc_add_name(msg: types.Message, state: FSMContext):
@@ -1831,14 +1951,29 @@ async def cat_svcs(cb: types.CallbackQuery):
     cid  = int(cb.data.replace("cat_svcs_",""))
     conn = db(); c = conn.cursor()
     c.execute("SELECT id,name,price_per1000,is_active FROM services WHERE category_id=?", (cid,))
-    svcs = c.fetchall(); conn.close()
-    if not svcs: await cb.answer("❌ Xizmatlar yo'q", show_alert=True); return
+    svcs = c.fetchall()
+    c.execute("SELECT name FROM categories WHERE id=?", (cid,))
+    cat_row = c.fetchone()
+    conn.close()
+    cat_name = cat_row[0] if cat_row else "Bo'lim"
+    if not svcs:
+        await cb.answer("❌ Xizmatlar yo'q", show_alert=True); return
     b = InlineKeyboardBuilder()
     for sid, sname, sprice, sact in svcs:
         st = "✅" if sact else "❌"
         b.button(text=f"{st} {sname} — {sprice:.0f} {cur()}", callback_data=f"svc_{sid}")
+    b.button(text="➕ Xizmat qo'shish", callback_data=f"cat_svc_add_{cid}")
     b.adjust(1)
-    await cb.message.answer(f"📋 Xizmatlar ({len(svcs)} ta):", reply_markup=b.as_markup())
+    try:
+        await cb.message.edit_text(
+            f"📋 {cat_name} — xizmatlar ({len(svcs)} ta):",
+            reply_markup=b.as_markup()
+        )
+    except Exception:
+        await cb.message.answer(
+            f"📋 {cat_name} — xizmatlar ({len(svcs)} ta):",
+            reply_markup=b.as_markup()
+        )
     await cb.answer()
 
 @dp.message(F.text == "🛠 Barcha xizmatlar")
@@ -1868,12 +2003,17 @@ async def svc_detail(cb: types.CallbackQuery):
     b.button(text="❌ O'chirish" if svc[8] else "✅ Faollashtirish", callback_data=f"svc_tog_{sid}")
     b.button(text="🗑 O'chirish", callback_data=f"svc_del_{sid}")
     b.adjust(2)
-    await cb.message.answer(
-        f"🛠 {svc[4]}\nHolat: {status}\n"
-        f"💰 {svc[7]:.0f} {cur()}/1000\nMin:{svc[5]} Max:{svc[6]}\n"
-        f"API ID: {svc[3]}",
-        reply_markup=b.as_markup()
+    text = (
+        f"🛠 {svc[4]}\n"
+        f"Holat: {status}\n"
+        f"💰 {svc[7]:.0f} {cur()}/1000\n"
+        f"Min: {svc[5]}  |  Max: {svc[6]}\n"
+        f"API Xizmat ID: {svc[3]}"
     )
+    try:
+        await cb.message.edit_text(text, reply_markup=b.as_markup())
+    except Exception:
+        await cb.message.answer(text, reply_markup=b.as_markup())
     await cb.answer()
 
 @dp.callback_query(F.data.startswith("svc_tog_"))
@@ -1882,8 +2022,26 @@ async def svc_toggle(cb: types.CallbackQuery):
     conn = db(); c = conn.cursor()
     c.execute("SELECT is_active FROM services WHERE id=?", (sid,))
     v    = c.fetchone()[0]
-    c.execute("UPDATE services SET is_active=? WHERE id=?", (0 if v else 1, sid))
+    new_v = 0 if v else 1
+    c.execute("UPDATE services SET is_active=? WHERE id=?", (new_v, sid))
+    c.execute("SELECT * FROM services WHERE id=?", (sid,))
+    svc = c.fetchone()
     conn.commit(); conn.close()
+    status = "✅ Faol" if new_v else "❌ Nofaol"
+    b = InlineKeyboardBuilder()
+    b.button(text="❌ O'chirish" if new_v else "✅ Faollashtirish", callback_data=f"svc_tog_{sid}")
+    b.button(text="🗑 O'chirish", callback_data=f"svc_del_{sid}")
+    b.adjust(2)
+    try:
+        await cb.message.edit_text(
+            f"🛠 {svc[4]}\nHolat: {status}\n"
+            f"💰 {svc[7]:.0f} {cur()}/1000\n"
+            f"Min: {svc[5]}  |  Max: {svc[6]}\n"
+            f"API Xizmat ID: {svc[3]}",
+            reply_markup=b.as_markup()
+        )
+    except Exception:
+        pass
     await cb.answer("✅ O'zgartirildi!")
 
 @dp.callback_query(F.data.startswith("svc_del_"))
@@ -1892,7 +2050,11 @@ async def svc_del(cb: types.CallbackQuery):
     conn = db(); c = conn.cursor()
     c.execute("DELETE FROM services WHERE id=?", (sid,))
     conn.commit(); conn.close()
-    await cb.message.answer("✅ Xizmat o'chirildi!"); await cb.answer()
+    try:
+        await cb.message.edit_text("✅ Xizmat o'chirildi!", reply_markup=None)
+    except Exception:
+        await cb.message.answer("✅ Xizmat o'chirildi!")
+    await cb.answer()
 
 # ═══════════════════════════════════════════════════════════
 #  MAIN
