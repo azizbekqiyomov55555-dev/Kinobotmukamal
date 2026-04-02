@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 # ============================================================
-#   SMM BOT - Telegram SMM Panel Bot
+#   SMM BOT - Yangilangan versiya
+#   O'zgarishlar:
+#     1. Ijtimoiy tarmoqlar 2x2 grid (Telegram, Instagram, Youtube, Tiktok)
+#     2. Har bir platforma uchun alohida bo'limlar
+#     3. Buyruqlar 15 sekundda o'chib ketadi
+#     4. Narx to'g'ri ko'rsatiladi
+#     5. Admin: bo'lim qo'shishda platforma tanlash
 #   Ishlatish: pip install aiogram aiohttp
-#   Keyin: python smm_bot.py
 # ============================================================
 
 import asyncio
@@ -25,11 +30,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ============================================================
-#  ⚙️  SOZLAMALAR  –  shu qatorlarni o'zgartiring
+#  ⚙️  SOZLAMALAR
 # ============================================================
-BOT_TOKEN  = "8648355597:AAF_eM_GHY3SmBpHB4VSuK93O-o_pUXdgFg"       # @BotFather dan oling
-ADMIN_IDS  = [8537782289]                 # O'z Telegram ID-ingizni yozing
-# ============================================================
+BOT_TOKEN = "8648355597:AAF_eM_GHY3SmBpHB4VSuK93O-o_pUXdgFg"
+ADMIN_IDS = [8537782289]
+
+# Platformalar
+PLATFORMS = {
+    "telegram":  "Telegram",
+    "instagram": "Instagram",
+    "youtube":   "Youtube",
+    "tiktok":    "Tik tok",
+}
 
 DB = "smm_bot.db"
 
@@ -54,11 +66,19 @@ def init_db():
         created_at     TEXT    DEFAULT CURRENT_TIMESTAMP
     )""")
 
+    # platform ustuni qo'shilgan (telegram/instagram/youtube/tiktok)
     c.execute("""CREATE TABLE IF NOT EXISTS categories (
         id        INTEGER PRIMARY KEY AUTOINCREMENT,
         name      TEXT NOT NULL,
+        platform  TEXT NOT NULL DEFAULT 'telegram',
         is_active INTEGER DEFAULT 1
     )""")
+
+    # Mavjud jadvalga platform ustuni qo'shish (migration)
+    try:
+        c.execute("ALTER TABLE categories ADD COLUMN platform TEXT NOT NULL DEFAULT 'telegram'")
+    except Exception:
+        pass
 
     c.execute("""CREATE TABLE IF NOT EXISTS apis (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -135,7 +155,6 @@ def init_db():
         ("premium_emoji",  "1"),
         ("payme_active",   "0"),
         ("click_active",   "0"),
-        ("uzcart_active",  "0"),
     ]
     for k, v in defaults:
         c.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", (k, v))
@@ -143,15 +162,16 @@ def init_db():
     c.execute("INSERT OR IGNORE INTO guides(id,title,content) VALUES(1,?,?)", (
         "Botdan foydalanish qo'llanmasi",
         "1. Buyurtma berish uchun 'Buyurtma berish' tugmasini bosing\n"
-        "2. Bo'limni tanlang → Xizmatni tanlang\n"
-        "3. Link va miqdorni kiriting\n"
-        "4. Tasdiqlang – pul hisobingizdan yechiladi"
+        "2. Ijtimoiy tarmoqni tanlang (Telegram, Instagram va h.k)\n"
+        "3. Bo'limni tanlang → Xizmatni tanlang\n"
+        "4. Link va miqdorni kiriting\n"
+        "5. Tasdiqlang – pul hisobingizdan yechiladi"
     ))
 
     conn.commit()
     conn.close()
 
-# helpers
+# ─── Yordamchi funksiyalar ───────────────────────────────────
 def get_setting(key, default=""):
     conn = db(); c = conn.cursor()
     c.execute("SELECT value FROM settings WHERE key=?", (key,))
@@ -163,7 +183,7 @@ def set_setting(key, value):
     c.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (key, str(value)))
     conn.commit(); conn.close()
 
-def cur():  return get_setting("currency", "Sum")
+def cur(): return get_setting("currency", "Sum")
 
 def get_user(uid):
     conn = db(); c = conn.cursor()
@@ -188,10 +208,19 @@ def orders_count(uid):
     c.execute("SELECT COUNT(*) FROM orders WHERE user_id=?", (uid,))
     n = c.fetchone()[0]; conn.close(); return n
 
+async def auto_delete(message: types.Message, delay: int = 15):
+    """Xabarni delay sekunddan keyin o'chiradi"""
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
 # ─────────────────────────────────────────────────────────────
 #  STATES
 # ─────────────────────────────────────────────────────────────
-class US(StatesGroup):          # User States
+class US(StatesGroup):
+    select_platform  = State()
     select_category  = State()
     select_service   = State()
     enter_link       = State()
@@ -199,7 +228,8 @@ class US(StatesGroup):          # User States
     topup_amount     = State()
     support_msg      = State()
 
-class AS(StatesGroup):          # Admin States
+class AS(StatesGroup):
+    add_cat_platform   = State()
     add_category       = State()
     api_name           = State()
     api_url            = State()
@@ -217,12 +247,10 @@ class AS(StatesGroup):          # Admin States
     broadcast_uid_msg  = State()
     user_id_input      = State()
     balance_amount     = State()
-    # Manual payment
     mpay_name          = State()
     mpay_card          = State()
     mpay_expiry        = State()
     mpay_holder        = State()
-    # Bot account
     bot_api_token      = State()
     bot_api_url        = State()
     add_channel        = State()
@@ -261,13 +289,25 @@ def back_kb():
 def cancel_kb():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Bekor qilish")]], resize_keyboard=True)
 
+def platforms_inline_kb():
+    """2x2 grid: Telegram, Instagram, Youtube, Tik tok"""
+    b = InlineKeyboardBuilder()
+    b.button(text="Telegram",  callback_data="plat_telegram")
+    b.button(text="Instagram", callback_data="plat_instagram")
+    b.button(text="Youtube",   callback_data="plat_youtube")
+    b.button(text="Tik tok",   callback_data="plat_tiktok")
+    b.button(text="◀️ Orqaga", callback_data="order_back_main")
+    b.adjust(2, 2, 1)
+    return b.as_markup()
+
 # ─────────────────────────────────────────────────────────────
 #  API HELPERS
 # ─────────────────────────────────────────────────────────────
 async def api_services(url, key):
     try:
         async with aiohttp.ClientSession() as s:
-            async with s.post(url, data={"key": key, "action": "services"}, timeout=aiohttp.ClientTimeout(total=10)) as r:
+            async with s.post(url, data={"key": key, "action": "services"},
+                              timeout=aiohttp.ClientTimeout(total=10)) as r:
                 return await r.json(content_type=None)
     except Exception as e:
         logger.error(f"api_services error: {e}")
@@ -301,12 +341,12 @@ async def api_balance(url, key):
         return None, None
 
 # ─────────────────────────────────────────────────────────────
-#  BOT
+#  BOT & DISPATCHER
 # ─────────────────────────────────────────────────────────────
 bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
 
-# ── subscription check ──────────────────────────────────────
+# ── Obunani tekshirish ──────────────────────────────────────
 async def check_sub(uid):
     conn = db(); c = conn.cursor()
     c.execute("SELECT channel_id FROM channels")
@@ -332,7 +372,7 @@ async def sub_kb():
     return b.as_markup()
 
 # ═══════════════════════════════════════════════════════════
-#  /start
+#  /start — buyruq 15 sekundda o'chadi
 # ═══════════════════════════════════════════════════════════
 @dp.message(Command("start"))
 async def cmd_start(msg: types.Message, state: FSMContext):
@@ -347,8 +387,12 @@ async def cmd_start(msg: types.Message, state: FSMContext):
     if not get_user(uid):
         reg_user(uid, msg.from_user.username or "", msg.from_user.full_name or "", ref)
 
+    # /start buyrug'ini 15 sekundda o'chir
+    asyncio.create_task(auto_delete(msg, 15))
+
     if not await check_sub(uid):
-        await msg.answer("⚠️ Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:", reply_markup=await sub_kb())
+        await msg.answer("⚠️ Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
+                         reply_markup=await sub_kb())
         return
 
     await msg.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(uid in ADMIN_IDS))
@@ -356,7 +400,8 @@ async def cmd_start(msg: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "check_sub")
 async def cb_check_sub(cb: types.CallbackQuery):
     if await check_sub(cb.from_user.id):
-        await cb.message.answer("✅ Tasdiqlandi!\n🖥 Asosiy menyudasiz!", reply_markup=main_kb(cb.from_user.id in ADMIN_IDS))
+        await cb.message.answer("✅ Tasdiqlandi!\n🖥 Asosiy menyudasiz!",
+                                 reply_markup=main_kb(cb.from_user.id in ADMIN_IDS))
         await cb.answer("✅ Tasdiqlandi!")
     else:
         await cb.answer("❌ Siz hali obuna bo'lmadingiz!", show_alert=True)
@@ -374,10 +419,10 @@ async def my_account(msg: types.Message):
     ], resize_keyboard=True)
     await msg.answer(
         f"👤 Sizning ID raqamingiz: {u[0]}\n\n"
-        f"💵 Balansingiz: {u[3]:.0f} {cur()}\n"
+        f"💵 Balansingiz: {u[3]:.2f} {cur()}\n"
         f"📊 Buyurtmalaringiz: {orders_count(u[0])} ta\n"
         f"👥 Referallaringiz: {u[5]} ta\n"
-        f"💰 Kiritgan pullaringiz: {u[6]:.0f} {cur()}",
+        f"💰 Kiritgan pullaringiz: {u[6]:.2f} {cur()}",
         reply_markup=kb
     )
 
@@ -419,7 +464,7 @@ async def topup(msg: types.Message):
 
 @dp.callback_query(F.data.startswith("pay_manual_"))
 async def pay_manual_show(cb: types.CallbackQuery):
-    pid = int(cb.data.replace("pay_manual_",""))
+    pid = int(cb.data.replace("pay_manual_", ""))
     conn = db(); c = conn.cursor()
     c.execute("SELECT name,card_number,card_expiry,card_holder FROM manual_payments WHERE id=?", (pid,))
     pay = c.fetchone(); conn.close()
@@ -436,7 +481,7 @@ async def pay_manual_show(cb: types.CallbackQuery):
     )
     await cb.answer()
 
-@dp.callback_query(F.data.startswith("pay_"))
+@dp.callback_query(F.data.startswith("pay_") & ~F.data.startswith("pay_manual_"))
 async def pay_method(cb: types.CallbackQuery, state: FSMContext):
     await state.update_data(pay_method=cb.data)
     await state.set_state(US.topup_amount)
@@ -487,7 +532,7 @@ async def my_orders(msg: types.Message):
     if total == 0:
         await msg.answer("❌ Sizda buyurtmalar mavjud emas."); return
     st = {}
-    for s in ("completed","cancelled","pending","processing","partial"):
+    for s in ("completed", "cancelled", "pending", "processing", "partial"):
         c.execute("SELECT COUNT(*) FROM orders WHERE user_id=? AND status=?", (uid, s))
         st[s] = c.fetchone()[0]
     conn.close()
@@ -495,33 +540,21 @@ async def my_orders(msg: types.Message):
         f"📈 Buyurtmalar: {total} ta\n\n"
         f"✅ Bajarilganlar: {st['completed']} ta\n"
         f"🚫 Bekor qilinganlar: {st['cancelled']} ta\n"
-        f"⏳ Bajarilayotganlar: {st['pending']} ta\n"
+        f"⏳ Kutilayotganlar: {st['pending']} ta\n"
         f"🔄 Jarayondagilar: {st['processing']} ta\n"
-        f"♻️ Qayta ishlanganlar: {st['partial']} ta"
+        f"♻️ Qisman: {st['partial']} ta"
     )
 
 # ═══════════════════════════════════════════════════════════
-#  USER — Buyurtma berish
+#  USER — Buyurtma berish → Platforma tanlash (2x2 grid)
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "Buyurtma berish")
 async def place_order(msg: types.Message, state: FSMContext):
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT id,name FROM categories WHERE is_active=1")
-    cats = c.fetchall(); conn.close()
-    if not cats:
-        await msg.answer("❌ Hozirda xizmatlar mavjud emas."); return
-
-    b = InlineKeyboardBuilder()
-    for cid, name in cats:
-        b.button(text=name, callback_data=f"order_cat_{cid}")
-    b.button(text="◀️ Orqaga", callback_data="order_back_main")
-    b.adjust(2)
-
-    await state.set_state(US.select_category)
-    await state.update_data(cats={str(cid): name for cid, name in cats})
-    await msg.answer(".", reply_markup=ReplyKeyboardRemove())
-    await msg.answer("Quyidagi ijtimoiy tarmoqlardan birini tanlang.", reply_markup=b.as_markup())
-
+    await state.set_state(US.select_platform)
+    await msg.answer(
+        "Quyidagi ijtimoiy tarmoqlardan birini tanlang.",
+        reply_markup=platforms_inline_kb()
+    )
 
 @dp.callback_query(F.data == "order_back_main")
 async def order_back_main(cb: types.CallbackQuery, state: FSMContext):
@@ -533,83 +566,110 @@ async def order_back_main(cb: types.CallbackQuery, state: FSMContext):
     await cb.message.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(cb.from_user.id in ADMIN_IDS))
     await cb.answer()
 
+# ─── Platforma tanlandi → bo'limlar ────────────────────────
+@dp.callback_query(F.data.startswith("plat_"))
+async def platform_selected(cb: types.CallbackQuery, state: FSMContext):
+    platform = cb.data.replace("plat_", "")
+    plat_name = PLATFORMS.get(platform, platform.capitalize())
 
-# ─── Kategoriya → xizmatlar ro'yxati ───────────────────────
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT id, name FROM categories WHERE is_active=1 AND platform=?", (platform,))
+    cats = c.fetchall()
+    conn.close()
+
+    if not cats:
+        await cb.answer(f"❌ {plat_name} uchun bo'limlar yo'q!", show_alert=True)
+        return
+
+    b = InlineKeyboardBuilder()
+    for cid, cname in cats:
+        b.button(text=cname, callback_data=f"order_cat_{cid}")
+    b.button(text="◀️ Orqaga", callback_data="back_to_platforms")
+    b.adjust(1)
+
+    await state.update_data(platform=platform, plat_name=plat_name)
+    await state.set_state(US.select_category)
+
+    try:
+        await cb.message.edit_text(
+            f"Quyidagi bo'limlardan birini tanlang.",
+            reply_markup=b.as_markup()
+        )
+    except Exception:
+        await cb.message.answer(
+            f"Quyidagi bo'limlardan birini tanlang.",
+            reply_markup=b.as_markup()
+        )
+    await cb.answer()
+
+@dp.callback_query(F.data == "back_to_platforms")
+async def back_to_platforms(cb: types.CallbackQuery, state: FSMContext):
+    await state.set_state(US.select_platform)
+    try:
+        await cb.message.edit_text(
+            "Quyidagi ijtimoiy tarmoqlardan birini tanlang.",
+            reply_markup=platforms_inline_kb()
+        )
+    except Exception:
+        await cb.message.answer(
+            "Quyidagi ijtimoiy tarmoqlardan birini tanlang.",
+            reply_markup=platforms_inline_kb()
+        )
+    await cb.answer()
+
+# ─── Bo'lim tanlandi → xizmatlar ───────────────────────────
 @dp.callback_query(F.data.startswith("order_cat_"))
 async def order_cat_selected(cb: types.CallbackQuery, state: FSMContext):
     cat_id = int(cb.data.replace("order_cat_", ""))
     conn = db(); c = conn.cursor()
     c.execute(
-        "SELECT id,name,price_per1000,min_qty,max_qty FROM services "
+        "SELECT id, name, price_per1000, min_qty, max_qty FROM services "
         "WHERE category_id=? AND is_active=1", (cat_id,)
     )
     svcs = c.fetchall()
-    c.execute("SELECT name FROM categories WHERE id=?", (cat_id,))
-    cat_row  = c.fetchone(); conn.close()
-    cat_name = cat_row[0] if cat_row else "Bolim"
+    c.execute("SELECT name, platform FROM categories WHERE id=?", (cat_id,))
+    cat_row = c.fetchone()
+    conn.close()
 
     if not svcs:
-        await cb.answer("❌ Bu bo'limda xizmatlar yo'q.", show_alert=True); return
+        await cb.answer("❌ Bu bo'limda xizmatlar yo'q.", show_alert=True)
+        return
+
+    cat_name = cat_row[0] if cat_row else "Bo'lim"
+    platform = cat_row[1] if cat_row else "telegram"
+    plat_name = PLATFORMS.get(platform, platform.capitalize())
 
     b = InlineKeyboardBuilder()
     for sid, sname, price, mn, mx in svcs:
-        b.button(text=f"{sname} - {price:.0f} {cur()}", callback_data=f"sel_svc_{sid}")
-    b.button(text="◀️ Orqaga", callback_data="back_to_cats")
+        btn_text = f"{sname} - {price:.2f} {cur()}"
+        b.button(text=btn_text, callback_data=f"sel_svc_{sid}")
+    b.button(text="◀️ Orqaga", callback_data=f"plat_{platform}")
     b.adjust(1)
 
     await state.update_data(
         svcs={str(sid): (sid, sname, price, mn, mx) for sid, sname, price, mn, mx in svcs},
         last_cat_id=cat_id,
-        cat_name=cat_name
+        cat_name=cat_name,
+        platform=platform,
+        plat_name=plat_name,
     )
     await state.set_state(US.select_service)
 
-    text = "Quyidagi bo'limlardan birini tanlang."
+    text = f"Quyidagi xizmatlardan birini tanlang:\nNarxlar 1000 tasi uchun berilgan"
     try:
         await cb.message.edit_text(text, reply_markup=b.as_markup())
     except Exception:
         await cb.message.answer(text, reply_markup=b.as_markup())
     await cb.answer()
 
-
-# ─── Orqaga: kategoriyalarga ────────────────────────────────
-@dp.callback_query(F.data == "back_to_cats")
-async def back_to_cats(cb: types.CallbackQuery, state: FSMContext):
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT id,name FROM categories WHERE is_active=1")
-    cats = c.fetchall(); conn.close()
-    if not cats:
-        await cb.answer("❌ Hozirda xizmatlar mavjud emas.", show_alert=True); return
-
-    b = InlineKeyboardBuilder()
-    for cid, name in cats:
-        b.button(text=name, callback_data=f"order_cat_{cid}")
-    b.button(text="◀️ Orqaga", callback_data="order_back_main")
-    b.adjust(2)
-
-    await state.set_state(US.select_category)
-    await state.update_data(cats={str(cid): name for cid, name in cats})
-    try:
-        await cb.message.edit_text(
-            "Quyidagi ijtimoiy tarmoqlardan birini tanlang.",
-            reply_markup=b.as_markup()
-        )
-    except Exception:
-        await cb.message.answer(
-            "Quyidagi ijtimoiy tarmoqlardan birini tanlang.",
-            reply_markup=b.as_markup()
-        )
-    await cb.answer()
-
-
-# ─── Xizmat → kartochka + "Buyurtma berish" tugmasi ─────────
+# ─── Xizmat kartochkasi ─────────────────────────────────────
 @dp.callback_query(F.data.startswith("sel_svc_"))
 async def sel_svc(cb: types.CallbackQuery, state: FSMContext):
     svc_id = int(cb.data.replace("sel_svc_", ""))
     conn = db(); c = conn.cursor()
     c.execute(
         "SELECT s.id, s.category_id, s.api_id, s.api_service_id, s.name, "
-        "s.min_qty, s.max_qty, s.price_per1000, s.is_active, cat.name "
+        "s.min_qty, s.max_qty, s.price_per1000, s.is_active, cat.name, cat.platform "
         "FROM services s LEFT JOIN categories cat ON s.category_id=cat.id "
         "WHERE s.id=?", (svc_id,)
     )
@@ -619,8 +679,10 @@ async def sel_svc(cb: types.CallbackQuery, state: FSMContext):
 
     svc      = row[:9]
     cat_name = row[9] or ""
+    platform = row[10] or "telegram"
+    plat_name = PLATFORMS.get(platform, platform.capitalize())
 
-    await state.update_data(svc=svc, svc_cat_name=cat_name)
+    await state.update_data(svc=svc, svc_cat_name=cat_name, platform=platform, plat_name=plat_name)
     await state.set_state(US.enter_quantity)
 
     b = InlineKeyboardBuilder()
@@ -629,8 +691,8 @@ async def sel_svc(cb: types.CallbackQuery, state: FSMContext):
     b.adjust(1)
 
     text = (
-        f"{cat_name} - {svc[4]}\n\n"
-        f"💰 Narxi (1000x): {svc[7]:.0f} {cur()}\n"
+        f"{plat_name} - {svc[4]}\n\n"
+        f"💰 Narxi (1000x): {svc[7]:.2f} {cur()}\n"
         f"⬇️ Minimal: {svc[5]} ta\n"
         f"⬆️ Maksimal: {svc[6]} ta"
     )
@@ -640,8 +702,7 @@ async def sel_svc(cb: types.CallbackQuery, state: FSMContext):
         await cb.message.answer(text, reply_markup=b.as_markup())
     await cb.answer()
 
-
-# ─── "Buyurtma berish" → miqdor so'raydi ───────────────────
+# ─── Buyurtma berish → miqdor so'rash ──────────────────────
 @dp.callback_query(F.data.startswith("start_order_"))
 async def start_order(cb: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -649,15 +710,14 @@ async def start_order(cb: types.CallbackQuery, state: FSMContext):
     if not svc:
         await cb.answer("❌ Xizmat topilmadi", show_alert=True); return
 
-    cat_name = data.get("svc_cat_name", "")
+    plat_name = data.get("plat_name", "")
     await state.set_state(US.enter_quantity)
 
     b = InlineKeyboardBuilder()
     b.button(text="◀️ Orqaga", callback_data=f"sel_svc_{svc[0]}")
-    b.adjust(1)
 
     text = (
-        f"{cat_name} - {svc[4]}\n\n"
+        f"{plat_name} - {svc[4]}\n\n"
         f"🔢 Buyurtma miqdorini kiriting:\n\n"
         f"⬇️ Minimal: {svc[5]} ta\n"
         f"⬆️ Maksimal: {svc[6]} ta"
@@ -668,8 +728,7 @@ async def start_order(cb: types.CallbackQuery, state: FSMContext):
         await cb.message.answer(text)
     await cb.answer()
 
-
-# ─── Miqdor kiritildi → link so'raydi ──────────────────────
+# ─── Miqdor kiritildi → link so'rash ───────────────────────
 @dp.message(US.enter_quantity)
 async def enter_qty(msg: types.Message, state: FSMContext):
     if msg.text in ("❌ Bekor qilish", "◀️ Orqaga"):
@@ -687,26 +746,25 @@ async def enter_qty(msg: types.Message, state: FSMContext):
         if not (svc[5] <= qty <= svc[6]):
             raise ValueError
     except (ValueError, TypeError):
-        await msg.answer(f"❌ Miqdor {svc[5]} – {svc[6]} orasida bolishi kerak"); return
+        await msg.answer(f"❌ Miqdor {svc[5]} – {svc[6]} orasida bo'lishi kerak")
+        return
 
     await state.update_data(qty=qty)
     await state.set_state(US.enter_link)
 
-    cat_name = data.get("svc_cat_name", "")
-    amount   = (qty / 1000) * svc[7]
+    plat_name = data.get("plat_name", "")
+    amount    = (qty / 1000) * svc[7]
 
     await msg.answer(
-        f"{cat_name} - {svc[4]}\n\n"
+        f"{plat_name} - {svc[4]}\n\n"
         f"📊 Miqdor: {qty} ta\n"
-        f"💰 Narx: {amount:.0f} {cur()}\n\n"
-        f"🔗 Linkni yuboring:\n"
-        f"(Masalan: https://t.me/username)",
+        f"💰 Narx: {amount:.2f} {cur()}\n\n"
+        f"🔗 Linkni yuboring:\n(Masalan: https://t.me/username)",
         reply_markup=ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text="◀️ Orqaga")]],
             resize_keyboard=True
         )
     )
-
 
 # ─── Link kiritildi → tasdiqlash ────────────────────────────
 @dp.message(US.enter_link)
@@ -716,12 +774,11 @@ async def enter_link(msg: types.Message, state: FSMContext):
         svc  = data.get("svc")
         await state.set_state(US.enter_quantity)
         if svc:
-            cat_name = data.get("svc_cat_name", "")
+            plat_name = data.get("plat_name", "")
             b = InlineKeyboardBuilder()
             b.button(text="◀️ Orqaga", callback_data=f"sel_svc_{svc[0]}")
-            b.adjust(1)
             await msg.answer(
-                f"{cat_name} - {svc[4]}\n\n"
+                f"{plat_name} - {svc[4]}\n\n"
                 f"🔢 Buyurtma miqdorini kiriting:\n\n"
                 f"⬇️ Minimal: {svc[5]} ta\n"
                 f"⬆️ Maksimal: {svc[6]} ta",
@@ -739,16 +796,16 @@ async def enter_link(msg: types.Message, state: FSMContext):
     qty      = data["qty"]
     amount   = (qty / 1000) * svc[7]
     u        = get_user(msg.from_user.id)
-    cat_name = data.get("svc_cat_name", "")
+    plat_name = data.get("plat_name", "")
 
     await state.update_data(link=msg.text, amount=amount)
 
     if u[3] < amount:
         await msg.answer(
             f"❌ Balansingiz yetarli emas!\n\n"
-            f"💵 Balans: {u[3]:.0f} {cur()}\n"
-            f"💰 Kerak: {amount:.0f} {cur()}\n"
-            f"➖ Yetishmaydi: {amount - u[3]:.0f} {cur()}\n\n"
+            f"💵 Balans: {u[3]:.2f} {cur()}\n"
+            f"💰 Kerak: {amount:.2f} {cur()}\n"
+            f"➖ Yetishmaydi: {amount - u[3]:.2f} {cur()}\n\n"
             f"Hisob to'ldirish uchun asosiy menyudan foydalaning.",
             reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)
         )
@@ -761,17 +818,16 @@ async def enter_link(msg: types.Message, state: FSMContext):
 
     await msg.answer(
         f"📋 Buyurtma ma'lumotlari:\n\n"
-        f"📌 Xizmat: {cat_name} - {svc[4]}\n"
+        f"📌 Xizmat: {plat_name} - {svc[4]}\n"
         f"🔗 Link: {msg.text}\n"
         f"📊 Miqdor: {qty} ta\n"
-        f"💰 Tolash: {amount:.0f} {cur()}\n"
-        f"💵 Balans: {u[3]:.0f} {cur()}\n\n"
+        f"💰 To'lash: {amount:.2f} {cur()}\n"
+        f"💵 Balans: {u[3]:.2f} {cur()}\n\n"
         f"Tasdiqlaysizmi?",
         reply_markup=b.as_markup()
     )
 
-
-# ─── Tasdiqlash → API ───────────────────────────────────────
+# ─── Tasdiqlash → API yuborish ──────────────────────────────
 @dp.callback_query(F.data == "order_yes")
 async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
     data   = await state.get_data()
@@ -780,6 +836,7 @@ async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
     qty    = data["qty"]
     amount = data["amount"]
     uid    = cb.from_user.id
+    plat_name = data.get("plat_name", "")
 
     conn = db(); c = conn.cursor()
     c.execute("UPDATE users SET balance=balance-? WHERE user_id=?", (amount, uid))
@@ -808,18 +865,17 @@ async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
     )
     conn.commit(); conn.close()
 
-    u           = get_user(uid)
+    u = get_user(uid)
     new_balance = u[3] if u else 0
-    cat_name    = data.get("svc_cat_name", "")
 
     lines = [
         "✅ Buyurtma muvaffaqiyatli yuborildi!\n",
         f"🆔 Buyurtma: #{order_id}",
-        f"📌 Xizmat: {cat_name} - {svc[4]}",
+        f"📌 Xizmat: {plat_name} - {svc[4]}",
         f"🔗 Link: {link}",
         f"📊 Miqdor: {qty} ta",
-        f"💰 Yechildi: {amount:.0f} {cur()}",
-        f"💵 Qolgan balans: {new_balance:.0f} {cur()}",
+        f"💰 Yechildi: {amount:.2f} {cur()}",
+        f"💵 Qolgan balans: {new_balance:.2f} {cur()}",
     ]
     if api_order_id:
         lines.append(f"📡 API order ID: {api_order_id}")
@@ -835,7 +891,6 @@ async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
     await cb.message.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(uid in ADMIN_IDS))
     await cb.answer()
 
-
 @dp.callback_query(F.data == "order_no")
 async def order_cancel(cb: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -845,7 +900,6 @@ async def order_cancel(cb: types.CallbackQuery, state: FSMContext):
         pass
     await cb.message.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(cb.from_user.id in ADMIN_IDS))
     await cb.answer()
-
 
 # ═══════════════════════════════════════════════════════════
 #  USER — Murojaat
@@ -864,7 +918,8 @@ async def do_support(msg: types.Message, state: FSMContext):
         try:
             await bot.send_message(admin,
                 f"📩 Yangi murojaat!\n👤 {msg.from_user.full_name}\n🆔 {msg.from_user.id}\n📝 {msg.text}")
-        except: pass
+        except:
+            pass
     await state.clear()
     await msg.answer("✅ Murojaatingiz qabul qilindi!", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
 
@@ -894,7 +949,7 @@ async def show_guide(cb: types.CallbackQuery):
     await cb.answer()
 
 # ═══════════════════════════════════════════════════════════
-#  BACK / orqaga
+#  ORQAGA
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "◀️ Orqaga")
 async def go_back(msg: types.Message, state: FSMContext):
@@ -910,31 +965,29 @@ async def admin_panel(msg: types.Message, state: FSMContext):
     if msg.from_user.id not in ADMIN_IDS:
         await msg.answer("❌ Siz admin emassiz!"); return
     await state.clear()
-    await msg.answer("Admin paneliga hush kelibsiz !", reply_markup=admin_kb())
+    await msg.answer("Admin paneliga xush kelibsiz!", reply_markup=admin_kb())
 
 # ── Asosiy sozlamalar ─────────────────────────────────────
 @dp.message(F.text == "⚙️ Asosiy sozlamalar")
 async def admin_settings(msg: types.Message):
     if msg.from_user.id not in ADMIN_IDS: return
-    rb   = get_setting("referral_bonus","2500")
-    cv   = get_setting("currency","Sum")
-    st_s = "✅ Faol" if get_setting("service_time","1")=="1" else "❌ Nofaol"
-    st_p = "✅ Faol" if get_setting("premium_emoji","1")=="1" else "❌ Nofaol"
+    rb   = get_setting("referral_bonus", "2500")
+    cv   = get_setting("currency", "Sum")
+    st_s = "✅ Faol" if get_setting("service_time", "1") == "1" else "❌ Nofaol"
+    st_p = "✅ Faol" if get_setting("premium_emoji", "1") == "1" else "❌ Nofaol"
     b = InlineKeyboardBuilder()
-    b.button(text="💰 Referal o'zgartirish",        callback_data="set_ref")
-    b.button(text="💱 Valyuta o'zgartirish",         callback_data="set_cur")
-    b.button(text=f"🕐 Xizmat vaqti: {st_s}",       callback_data="tog_svctime")
-    b.button(text=f"✨ Premium emoji: {st_p}",       callback_data="tog_premium")
+    b.button(text="💰 Referal o'zgartirish",  callback_data="set_ref")
+    b.button(text="💱 Valyuta o'zgartirish",   callback_data="set_cur")
+    b.button(text=f"🕐 Xizmat vaqti: {st_s}", callback_data="tog_svctime")
+    b.button(text=f"✨ Premium emoji: {st_p}", callback_data="tog_premium")
     b.adjust(1)
     await msg.answer(
         f"⚙️ <b>Asosiy sozlamalar:</b>\n\n"
         f"♦️ Referal: {rb} {cv}\n"
         f"♦️ Valyuta: {cv}\n"
         f"♦️ Xizmat bajarilish vaqti: {st_s}\n"
-        f"♦️ Premium emoji: {st_p}\n\n"
-        f"<i>Premium emoji faqat Telegramda premium obunasi bor foydalanuvchi botlarida ishlaydi.</i>",
-        parse_mode="HTML",
-        reply_markup=b.as_markup()
+        f"♦️ Premium emoji: {st_p}",
+        parse_mode="HTML", reply_markup=b.as_markup()
     )
 
 @dp.callback_query(F.data == "set_ref")
@@ -943,6 +996,18 @@ async def cb_set_ref(cb: types.CallbackQuery, state: FSMContext):
     await state.set_state(AS.set_referral)
     await cb.message.answer(f"💰 Yangi referal miqdorini kiriting ({cur()}):", reply_markup=cancel_kb())
     await cb.answer()
+
+@dp.message(AS.set_referral)
+async def do_chg_ref(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    try:
+        v = float(msg.text); set_setting("referral_bonus", v)
+        await state.clear()
+        await msg.answer(f"✅ Referal <b>{v:.0f}</b> {cur()} ga o'zgartirildi!", parse_mode="HTML",
+                         reply_markup=admin_kb())
+    except:
+        await msg.answer("❌ Noto'g'ri miqdor, raqam kiriting:")
 
 @dp.callback_query(F.data == "set_cur")
 async def cb_set_cur(cb: types.CallbackQuery):
@@ -967,173 +1032,16 @@ async def cb_cur_select(cb: types.CallbackQuery):
 @dp.callback_query(F.data == "tog_svctime")
 async def cb_tog_svctime(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
-    v = "0" if get_setting("service_time","1")=="1" else "1"
+    v = "0" if get_setting("service_time", "1") == "1" else "1"
     set_setting("service_time", v)
     await cb.answer("✅ O'zgartirildi!")
-    rb   = get_setting("referral_bonus","2500")
-    cv   = get_setting("currency","Sum")
-    st_s = "✅ Faol" if v=="1" else "❌ Nofaol"
-    st_p = "✅ Faol" if get_setting("premium_emoji","1")=="1" else "❌ Nofaol"
-    b = InlineKeyboardBuilder()
-    b.button(text="💰 Referal o'zgartirish",        callback_data="set_ref")
-    b.button(text="💱 Valyuta o'zgartirish",         callback_data="set_cur")
-    b.button(text=f"🕐 Xizmat vaqti: {st_s}",       callback_data="tog_svctime")
-    b.button(text=f"✨ Premium emoji: {st_p}",       callback_data="tog_premium")
-    b.adjust(1)
-    try:
-        await cb.message.edit_text(
-            f"⚙️ <b>Asosiy sozlamalar:</b>\n\n"
-            f"♦️ Referal: {rb} {cv}\n♦️ Valyuta: {cv}\n"
-            f"♦️ Xizmat bajarilish vaqti: {st_s}\n♦️ Premium emoji: {st_p}\n\n"
-            f"<i>Premium emoji faqat Telegramda premium obunasi bor foydalanuvchi botlarida ishlaydi.</i>",
-            parse_mode="HTML", reply_markup=b.as_markup()
-        )
-    except: pass
 
 @dp.callback_query(F.data == "tog_premium")
 async def cb_tog_premium(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
-    v = "0" if get_setting("premium_emoji","1")=="1" else "1"
+    v = "0" if get_setting("premium_emoji", "1") == "1" else "1"
     set_setting("premium_emoji", v)
     await cb.answer("✅ O'zgartirildi!")
-    rb   = get_setting("referral_bonus","2500")
-    cv   = get_setting("currency","Sum")
-    st_s = "✅ Faol" if get_setting("service_time","1")=="1" else "❌ Nofaol"
-    st_p = "✅ Faol" if v=="1" else "❌ Nofaol"
-    b = InlineKeyboardBuilder()
-    b.button(text="💰 Referal o'zgartirish",        callback_data="set_ref")
-    b.button(text="💱 Valyuta o'zgartirish",         callback_data="set_cur")
-    b.button(text=f"🕐 Xizmat vaqti: {st_s}",       callback_data="tog_svctime")
-    b.button(text=f"✨ Premium emoji: {st_p}",       callback_data="tog_premium")
-    b.adjust(1)
-    try:
-        await cb.message.edit_text(
-            f"⚙️ <b>Asosiy sozlamalar:</b>\n\n"
-            f"♦️ Referal: {rb} {cv}\n♦️ Valyuta: {cv}\n"
-            f"♦️ Xizmat bajarilish vaqti: {st_s}\n♦️ Premium emoji: {st_p}\n\n"
-            f"<i>Premium emoji faqat Telegramda premium obunasi bor foydalanuvchi botlarida ishlaydi.</i>",
-            parse_mode="HTML", reply_markup=b.as_markup()
-        )
-    except: pass
-
-# ── Bot hisobi ────────────────────────────────────────────
-@dp.message(AS.set_referral)
-async def do_chg_ref(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
-    try:
-        v = float(msg.text); set_setting("referral_bonus", v)
-        await state.clear()
-        await msg.answer(f"✅ Referal <b>{v:.0f}</b> {cur()} ga o'zgartirildi!", parse_mode="HTML",
-                         reply_markup=admin_kb())
-    except: await msg.answer("❌ Noto'g'ri miqdor, raqam kiriting:")
-
-@dp.message(F.text == "🤖 Bot hisobi")
-async def bot_account_menu(msg: types.Message, state: FSMContext):
-    if msg.from_user.id not in ADMIN_IDS: return
-    saved_token = get_setting("ext_bot_token", "")
-    saved_url   = get_setting("ext_bot_url",   "")
-    b = InlineKeyboardBuilder()
-    if saved_token:
-        b.button(text="🔄 Yangilash",       callback_data="bot_acc_update")
-        b.button(text="💰 Balansni ko'rish", callback_data="bot_acc_balance")
-        b.button(text="🗑 O'chirish",        callback_data="bot_acc_delete")
-        b.adjust(2)
-        await msg.answer(
-            f"🤖 Bot hisobi:\n\n"
-            f"🔑 Token: {saved_token[:20]}...\n"
-            f"🌐 URL: {saved_url or 'Kiritilmagan'}",
-            reply_markup=b.as_markup()
-        )
-    else:
-        b.button(text="➕ Bot API qo'shish", callback_data="bot_acc_add")
-        b.adjust(1)
-        await msg.answer("🤖 Bot hisobi ulangan emas.\nBoshqa botni API tokenini ulashing:", reply_markup=b.as_markup())
-
-@dp.callback_query(F.data.in_({"bot_acc_add", "bot_acc_update"}))
-async def bot_acc_add(cb: types.CallbackQuery, state: FSMContext):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await state.set_state(AS.bot_api_token)
-    await cb.message.answer("🔑 Botning API tokenini kiriting\n(masalan: 123456:ABCdef...)", reply_markup=cancel_kb())
-    await cb.answer()
-
-@dp.message(AS.bot_api_token)
-async def bot_acc_token(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
-    await state.update_data(ext_token=msg.text.strip())
-    await state.set_state(AS.bot_api_url)
-    await msg.answer("🌐 SMM panel API URL ni kiriting\n(masalan: https://saleseen.uz/api/v2)\n\nAgar yo'q bo'lsa /skip yozing:")
-
-@dp.message(AS.bot_api_url)
-async def bot_acc_url(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
-    data = await state.get_data()
-    token = data["ext_token"]
-    url   = "" if msg.text.strip() == "/skip" else msg.text.strip()
-
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"https://api.telegram.org/bot{token}/getMe", timeout=aiohttp.ClientTimeout(total=8)) as r:
-                res = await r.json()
-        if not res.get("ok"):
-            await msg.answer(f"❌ Token noto'g'ri yoki bot topilmadi!\nXato: {res.get('description','')}"); await state.clear(); return
-        bot_info = res["result"]
-    except Exception as e:
-        await msg.answer(f"❌ Ulanib bo'lmadi: {e}"); await state.clear(); return
-
-    set_setting("ext_bot_token", token)
-    set_setting("ext_bot_url",   url)
-    await state.clear()
-    await msg.answer(
-        f"✅ Bot ulandi!\n\n"
-        f"🤖 @{bot_info.get('username','?')} — {bot_info.get('first_name','')}\n"
-        f"🆔 ID: {bot_info.get('id','?')}\n"
-        f"🌐 URL: {url or 'Kiritilmagan'}",
-        reply_markup=admin_kb()
-    )
-
-@dp.callback_query(F.data == "bot_acc_balance")
-async def bot_acc_balance(cb: types.CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    token = get_setting("ext_bot_token","")
-    url   = get_setting("ext_bot_url","")
-    if not token:
-        await cb.answer("❌ Bot ulanmagan!", show_alert=True); return
-    await cb.answer("⏳ Tekshirilmoqda...")
-
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"https://api.telegram.org/bot{token}/getMe", timeout=aiohttp.ClientTimeout(total=8)) as r:
-                bot_res = await r.json()
-        bot_name = bot_res.get("result",{}).get("username","?") if bot_res.get("ok") else "Noma'lum"
-    except:
-        bot_name = "Noma'lum"
-
-    balance_text = "—"
-    if url:
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.post(url, data={"key": token, "action": "balance"}, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                    bal_res = await r.json(content_type=None)
-            balance_text = f"{bal_res.get('balance','?')} {bal_res.get('currency','')}"
-        except Exception as e:
-            balance_text = f"Xato: {e}"
-
-    await cb.message.answer(
-        f"🤖 @{bot_name}\n"
-        f"💰 Panel balansi: {balance_text}\n"
-        f"🌐 URL: {url or 'Kiritilmagan'}"
-    )
-
-@dp.callback_query(F.data == "bot_acc_delete")
-async def bot_acc_delete(cb: types.CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    set_setting("ext_bot_token", "")
-    set_setting("ext_bot_url",   "")
-    await cb.message.answer("✅ Bot hisobi o'chirildi!")
-    await cb.answer()
 
 # ── Statistika ─────────────────────────────────────────────
 @dp.message(F.text == "📊 Statistika")
@@ -1153,10 +1061,13 @@ async def stat(msg: types.Message):
     b.button(text="👥 TOP-50 Referal", callback_data="top_ref")
     b.adjust(2)
     await msg.answer(
-        f"📊 Statistika\n• Obunachilar soni: {total} ta\n• Faol obunachilar: {total} ta\n• Tark etganlar: 0 ta\n\n"
-        f"📈 Qo'shilish\n• Oxirgi 24 soat: +{h24}\n• Oxirgi 7 kun: +{d7}\n• Oxirgi 30 kun: +{d30}\n\n"
-        f"📊 Faollik\n• 24 soatda faol: {h24} ta\n• 7 kun faol: {d7} ta\n• 30 kun faol: {d30} ta\n\n"
-        f"💵 Pullar Statistikasi\n• Puli borlar: {wb} ta\n• Jami pullar: {tm:.0f} {cur()}\n\n"
+        f"📊 Statistika\n\n"
+        f"👥 Jami foydalanuvchilar: {total} ta\n"
+        f"📈 Oxirgi 24 soat: +{h24}\n"
+        f"📈 Oxirgi 7 kun: +{d7}\n"
+        f"📈 Oxirgi 30 kun: +{d30}\n\n"
+        f"💵 Puli borlar: {wb} ta\n"
+        f"💰 Jami pullar: {tm:.2f} {cur()}\n\n"
         f"🤖 @{bi.username}",
         reply_markup=b.as_markup()
     )
@@ -1168,7 +1079,7 @@ async def top_balance(cb: types.CallbackQuery):
     rows = c.fetchall(); conn.close()
     text = "💵 TOP-50 Balans:\n\n"
     for i, (uid, name, bal) in enumerate(rows, 1):
-        text += f"{i}. {name or uid} — {bal:.0f} {cur()}\n"
+        text += f"{i}. {name or uid} — {bal:.2f} {cur()}\n"
     await cb.message.answer(text[:4096]); await cb.answer()
 
 @dp.callback_query(F.data == "top_ref")
@@ -1186,8 +1097,8 @@ async def top_ref(cb: types.CallbackQuery):
 async def broadcast_menu(msg: types.Message):
     if msg.from_user.id not in ADMIN_IDS: return
     b = InlineKeyboardBuilder()
-    b.button(text="💬 Oddiy xabar (1 foydalanuvchi)", callback_data="bc_single")
-    b.button(text="📨 Forward (barchaga)",            callback_data="bc_forward_all")
+    b.button(text="💬 1 foydalanuvchiga xabar",   callback_data="bc_single")
+    b.button(text="📨 Barchaga xabar (forward)", callback_data="bc_forward_all")
     b.adjust(1)
     await msg.answer("Xabar yuborish turini tanlang:", reply_markup=b.as_markup())
 
@@ -1203,406 +1114,89 @@ async def bc_forward_start(cb: types.CallbackQuery, state: FSMContext):
 async def bc_single_start(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
     await state.set_state(AS.broadcast_uid)
-    await cb.message.answer("🆔 Foydalanuvchi ID sini kiriting:", reply_markup=cancel_kb())
+    await cb.message.answer("👤 Foydalanuvchi ID sini kiriting:", reply_markup=cancel_kb())
     await cb.answer()
 
 @dp.message(AS.broadcast_uid)
-async def bc_single_uid(msg: types.Message, state: FSMContext):
+async def bc_uid(msg: types.Message, state: FSMContext):
     if msg.text == "❌ Bekor qilish":
         await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
     try:
         uid = int(msg.text)
+        await state.update_data(single_uid=uid)
+        await state.set_state(AS.broadcast_uid_msg)
+        await msg.answer(f"📝 {uid} ga xabar matnini kiriting:")
     except:
-        await msg.answer("❌ Noto'g'ri ID, raqam kiriting:"); return
-    await state.update_data(single_uid=uid)
-    await state.set_state(AS.broadcast_uid_msg)
-    await msg.answer(f"✅ ID: {uid}\n\n📝 Xabar matnini kiriting:", reply_markup=cancel_kb())
+        await msg.answer("❌ Noto'g'ri ID")
 
 @dp.message(AS.broadcast_uid_msg)
-async def bc_single_send(msg: types.Message, state: FSMContext):
+async def bc_uid_msg(msg: types.Message, state: FSMContext):
     if msg.text == "❌ Bekor qilish":
         await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
     data = await state.get_data()
     uid  = data["single_uid"]
     try:
         await bot.send_message(uid, msg.text)
-        await msg.answer(f"✅ {uid} ga xabar yuborildi!", reply_markup=admin_kb())
+        await msg.answer(f"✅ Xabar {uid} ga yuborildi!", reply_markup=admin_kb())
     except Exception as e:
-        await msg.answer(f"❌ Xabar yuborib bo'lmadi: {e}", reply_markup=admin_kb())
+        await msg.answer(f"❌ Xato: {e}", reply_markup=admin_kb())
     await state.clear()
-
-@dp.callback_query(F.data.startswith("bc_"))
-async def bc_type(cb: types.CallbackQuery, state: FSMContext):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await state.update_data(bc_type=cb.data.replace("bc_",""))
-    await state.set_state(AS.broadcast_msg)
-    await cb.message.answer("📝 Xabarni yuboring:", reply_markup=cancel_kb())
-    await cb.answer()
 
 @dp.message(AS.broadcast_msg)
 async def do_broadcast(msg: types.Message, state: FSMContext):
     if msg.text == "❌ Bekor qilish":
         await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
-    data = await state.get_data()
-    btype = data.get("bc_type","regular")
-    conn  = db(); c = conn.cursor()
-    c.execute("SELECT user_id FROM users"); users = c.fetchall(); conn.close()
-    sent = failed = 0
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT user_id FROM users")
+    users = c.fetchall(); conn.close()
+    sent = fail = 0
     for (uid,) in users:
         try:
-            if btype == "forward": await msg.forward(uid)
-            else: await bot.send_message(uid, msg.text)
+            await bot.forward_message(uid, msg.chat.id, msg.message_id)
             sent += 1
-        except: failed += 1
+        except:
+            fail += 1
         await asyncio.sleep(0.05)
     await state.clear()
-    await msg.answer(f"✅ Yuborildi!\n✅ Muvaffaqiyatli: {sent}\n❌ Xato: {failed}", reply_markup=admin_kb())
+    await msg.answer(f"✅ Xabar yuborildi!\n✔️ Muvaffaqiyatli: {sent}\n❌ Xato: {fail}",
+                     reply_markup=admin_kb())
 
-# ── Majbur obuna kanallar ──────────────────────────────────
-@dp.message(F.text == "🔒 Majbur obuna kanallar")
-async def channels_menu(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS: return
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM channels"); n = c.fetchone()[0]; conn.close()
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="➕ Kanal qo'shish")],
-        [KeyboardButton(text="📋 Ro'yxatni ko'rish")],
-        [KeyboardButton(text="🗑 Kanalni o'chirish")],
-        [KeyboardButton(text="◀️ Orqaga")],
-    ], resize_keyboard=True)
-    await msg.answer(f"🔒 Majburiy obuna kanallar: {n} ta", reply_markup=kb)
-
-@dp.message(F.text == "➕ Kanal qo'shish")
-async def add_ch(msg: types.Message, state: FSMContext):
-    if msg.from_user.id not in ADMIN_IDS: return
-    await state.set_state(AS.add_channel)
-    await msg.answer(
-        "📢 Formatda yuboring:\n@channel_id|Kanal nomi|https://t.me/channel",
-        reply_markup=cancel_kb()
-    )
-
-@dp.message(AS.add_channel)
-async def do_add_ch(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear(); await channels_menu(msg); return
-    try:
-        parts = msg.text.split("|")
-        cid, cname, clink = parts[0].strip(), parts[1].strip(), parts[2].strip()
-        conn = db(); c = conn.cursor()
-        c.execute("INSERT INTO channels(channel_id,channel_name,channel_link) VALUES(?,?,?)", (cid,cname,clink))
-        conn.commit(); conn.close()
-        await state.clear(); await msg.answer(f"✅ {cname} qo'shildi!")
-        await channels_menu(msg)
-    except: await msg.answer("❌ Noto'g'ri format")
-
-@dp.message(F.text == "📋 Ro'yxatni ko'rish")
-async def list_chs(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS: return
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT id,channel_name,channel_id FROM channels")
-    rows = c.fetchall(); conn.close()
-    if not rows: await msg.answer("❌ Kanallar yo'q"); return
-    text = "📋 Kanallar:\n\n"
-    for row in rows: text += f"{row[0]}. {row[1]} ({row[2]})\n"
-    await msg.answer(text)
-
-@dp.message(F.text == "🗑 Kanalni o'chirish")
-async def del_ch_menu(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS: return
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT id,channel_name FROM channels")
-    rows = c.fetchall(); conn.close()
-    if not rows: await msg.answer("❌ Kanallar yo'q"); return
-    b = InlineKeyboardBuilder()
-    for rid, rname in rows:
-        b.button(text=f"🗑 {rname}", callback_data=f"del_ch_{rid}")
-    b.adjust(1)
-    await msg.answer("O'chirish uchun tanlang:", reply_markup=b.as_markup())
-
-@dp.callback_query(F.data.startswith("del_ch_"))
-async def del_ch(cb: types.CallbackQuery):
-    cid = int(cb.data.replace("del_ch_",""))
-    conn = db(); c = conn.cursor()
-    c.execute("DELETE FROM channels WHERE id=?", (cid,))
-    conn.commit(); conn.close()
-    await cb.message.answer("✅ Kanal o'chirildi!"); await cb.answer()
-
-# ── To'lov tizimlar ────────────────────────────────────────
-@dp.message(F.text == "💳 To'lov tizimlar")
-async def pay_menu(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS: return
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="⚡ Avtomatik to'lov tizimlari")],
-        [KeyboardButton(text="📝 Oddiy to'lov tizimlari")],
-        [KeyboardButton(text="◀️ Orqaga")],
-    ], resize_keyboard=True)
-    await msg.answer("⚙️ To'lov tizim sozlamalarisiz:", reply_markup=kb)
-
-@dp.message(F.text == "⚡ Avtomatik to'lov tizimlari")
-async def auto_pay(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS: return
-    p = "✅" if get_setting("payme_active")=="1" else "❌"
-    cl= "✅" if get_setting("click_active")=="1" else "❌"
-    b = InlineKeyboardBuilder()
-    b.button(text=f"{p} Payme",  callback_data="tg_payme")
-    b.button(text=f"{cl} Click", callback_data="tg_click")
-    b.adjust(1)
-    await msg.answer("⚡ Avtomatik to'lov tizimlari:", reply_markup=b.as_markup())
-
-@dp.message(F.text == "📝 Oddiy to'lov tizimlari")
-async def manual_pay(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS: return
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT id,name,card_number,card_holder FROM manual_payments WHERE is_active=1")
-    pays = c.fetchall(); conn.close()
-    b = InlineKeyboardBuilder()
-    for pid, pname, pcard, pholder in pays:
-        b.button(text=f"💳 {pname} — {pcard}", callback_data=f"mpay_del_{pid}")
-    b.button(text="➕ To'lov tizimi qo'shish", callback_data="mpay_add")
-    b.adjust(1)
-    text = f"📝 Oddiy to'lov tizimlari: {len(pays)} ta\n\n"
-    for pid, pname, pcard, pholder in pays:
-        text += f"• {pname}: {pcard} ({pholder})\n"
-    await msg.answer(text or "📝 Oddiy to'lov tizimlari:", reply_markup=b.as_markup())
-
-@dp.callback_query(F.data == "mpay_add")
-async def mpay_add_start(cb: types.CallbackQuery, state: FSMContext):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await state.set_state(AS.mpay_name)
-    await cb.message.answer("💳 To'lov tizimi nomini kiriting:\n(masalan: Humo, Uzcard, Visa)", reply_markup=cancel_kb())
-    await cb.answer()
-
-@dp.message(AS.mpay_name)
-async def mpay_name_h(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
-    await state.update_data(mpay_name=msg.text)
-    await state.set_state(AS.mpay_card)
-    await msg.answer("💳 Karta raqamini kiriting:\n(masalan: 8600 1234 5678 9012)")
-
-@dp.message(AS.mpay_card)
-async def mpay_card_h(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
-    await state.update_data(mpay_card=msg.text.strip())
-    await state.set_state(AS.mpay_expiry)
-    await msg.answer("📅 Karta muddatini kiriting:\n(masalan: 12/27)")
-
-@dp.message(AS.mpay_expiry)
-async def mpay_expiry_h(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
-    await state.update_data(mpay_expiry=msg.text.strip())
-    await state.set_state(AS.mpay_holder)
-    await msg.answer("👤 Karta egasining to'liq ism-familiyasini kiriting:\n(masalan: Abdullayev Jahongir)")
-
-@dp.message(AS.mpay_holder)
-async def mpay_holder_h(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
-    data = await state.get_data()
-    conn = db(); c = conn.cursor()
-    c.execute("INSERT INTO manual_payments(name,card_number,card_expiry,card_holder) VALUES(?,?,?,?)",
-              (data["mpay_name"], data["mpay_card"], data["mpay_expiry"], msg.text.strip()))
-    conn.commit(); conn.close()
-    await state.clear()
-    await msg.answer(
-        f"✅ To'lov tizimi qo'shildi!\n\n"
-        f"💳 Nomi: {data['mpay_name']}\n"
-        f"🔢 Karta: {data['mpay_card']}\n"
-        f"📅 Muddat: {data['mpay_expiry']}\n"
-        f"👤 Egasi: {msg.text.strip()}",
-        reply_markup=admin_kb()
-    )
-
-@dp.callback_query(F.data.startswith("mpay_del_"))
-async def mpay_del(cb: types.CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    pid = int(cb.data.replace("mpay_del_",""))
-    b = InlineKeyboardBuilder()
-    b.button(text="🗑 Ha, o'chirish", callback_data=f"mpay_confirm_del_{pid}")
-    b.button(text="❌ Bekor",         callback_data="mpay_cancel")
-    b.adjust(2)
-    await cb.message.answer("⚠️ Bu to'lov tizimini o'chirmoqchimisiz?", reply_markup=b.as_markup())
-    await cb.answer()
-
-@dp.callback_query(F.data.startswith("mpay_confirm_del_"))
-async def mpay_confirm_del(cb: types.CallbackQuery):
-    pid = int(cb.data.replace("mpay_confirm_del_",""))
-    conn = db(); c = conn.cursor()
-    c.execute("DELETE FROM manual_payments WHERE id=?", (pid,))
-    conn.commit(); conn.close()
-    await cb.message.answer("✅ To'lov tizimi o'chirildi!"); await cb.answer()
-
-@dp.callback_query(F.data == "mpay_cancel")
-async def mpay_cancel(cb: types.CallbackQuery):
-    await cb.answer("Bekor qilindi")
-
-@dp.callback_query(F.data.startswith("tg_"))
-async def toggle_pay(cb: types.CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    method = cb.data.replace("tg_","")
-    key    = f"{method}_active"
-    v      = "0" if get_setting(key)=="1" else "1"
-    set_setting(key, v)
-    s = "faollashtirildi" if v=="1" else "o'chirildi"
-    await cb.answer(f"✅ {method.capitalize()} {s}!")
-
-# ── API ────────────────────────────────────────────────────
-@dp.message(F.text == "🔑 API")
-async def api_menu(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS: return
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT id,name,price_per1000 FROM apis")
-    apis = c.fetchall(); conn.close()
-    text = f"🔑 API'lar ro'yhati: {len(apis)} ta\n\n"
-    for i,(aid,aname,apr) in enumerate(apis, 1):
-        text += f"{i}. {aname} — {apr:.0f} {cur()}\n"
-    b = InlineKeyboardBuilder()
-    for aid, aname, _ in apis:
-        b.button(text=f"⚙️ {aname}", callback_data=f"api_det_{aid}")
-    b.button(text="➕ API qo'shish", callback_data="api_add")
-    b.adjust(1)
-    await msg.answer(text, reply_markup=b.as_markup())
-
-@dp.callback_query(F.data == "api_add")
-async def add_api(cb: types.CallbackQuery, state: FSMContext):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await state.set_state(AS.api_url)
-    await cb.message.answer(
-        "🌐 <b>API manzilini kiriting:</b>\n\n"
-        "Namuna: https://capitalsmmapi.uz/api/v2",
-        reply_markup=cancel_kb(),
-        parse_mode="HTML"
-    )
-    await cb.answer()
-
-@dp.message(AS.api_url)
-async def api_url_h(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear(); await api_menu(msg); return
-    url = msg.text.strip()
-    await state.update_data(api_url=url)
-    await state.set_state(AS.api_key)
-    await msg.answer(
-        f"❗️ <a href='{url}'>{url}</a> muvaffaqiyatli qabul qilindi!\n\n"
-        f"🔑 <b>API kalitini kiriting:</b>",
-        parse_mode="HTML",
-        reply_markup=cancel_kb()
-    )
-
-@dp.message(AS.api_key)
-async def api_key_h(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear(); await api_menu(msg); return
-    api_key = msg.text.strip()
-    data    = await state.get_data()
-    url     = data["api_url"]
-
-    try:
-        from urllib.parse import urlparse
-        auto_name = urlparse(url).netloc.replace("www.", "")
-    except:
-        auto_name = url[:30]
-
-    balance, api_cur = await api_balance(url, api_key)
-
-    conn = db(); c = conn.cursor()
-    c.execute("INSERT INTO apis(name,url,api_key,price_per1000) VALUES(?,?,?,?)",
-              (auto_name, url, api_key, 0))
-    conn.commit(); conn.close()
-    await state.clear()
-
-    if balance is not None:
-        bal_text = f"\n\n💰 <b>Balans:</b> {balance:.2f} {api_cur}"
-    else:
-        bal_text = ""
-
-    await msg.answer(
-        f"✅ <b>API muvaffaqiyatli qo'shildi!</b>{bal_text}",
-        parse_mode="HTML",
-        reply_markup=admin_kb()
-    )
-
-@dp.callback_query(F.data.startswith("api_det_"))
-async def api_detail(cb: types.CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    aid  = int(cb.data.replace("api_det_",""))
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT * FROM apis WHERE id=?", (aid,))
-    api  = c.fetchone(); conn.close()
-    if not api: await cb.answer("❌ Topilmadi"); return
-    await cb.answer("⏳ Balans tekshirilmoqda...")
-    balance, api_cur = await api_balance(api[2], api[3])
-    bal_text = f"\n💵 Balans: {balance:.2f} {api_cur}" if balance is not None else "\n💵 Balans: aniqlanmadi"
-    b = InlineKeyboardBuilder()
-    b.button(text="📋 Xizmatlarni yuklash", callback_data=f"api_fetch_{aid}")
-    b.button(text="🗑 O'chirish",            callback_data=f"api_del_{aid}")
-    b.adjust(1)
-    await cb.message.answer(
-        f"🔑 {api[1]}\n🌐 {api[2]}\n🔑 Key: {api[3][:12]}...{bal_text}",
-        reply_markup=b.as_markup()
-    )
-
-@dp.callback_query(F.data.startswith("api_fetch_"))
-async def api_fetch(cb: types.CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    aid  = int(cb.data.replace("api_fetch_",""))
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT url,api_key FROM apis WHERE id=?", (aid,))
-    api  = c.fetchone(); conn.close()
-    await cb.answer("⏳ Yuklanmoqda...")
-    svcs = await api_services(api[0], api[1])
-    if not svcs:
-        await cb.message.answer("❌ API dan yuklab bo'lmadi"); return
-    text = f"📋 API xizmatlari ({len(svcs)} ta):\n\n"
-    for s in svcs[:30]:
-        sid  = s.get("service", s.get("id",""))
-        name = s.get("name","")
-        rate = s.get("rate","")
-        text += f"ID:{sid} | {name[:40]} | {rate}\n"
-    if len(svcs) > 30:
-        text += f"\n... yana {len(svcs)-30} ta"
-    await cb.message.answer(text[:4096])
-
-@dp.callback_query(F.data.startswith("api_del_"))
-async def api_del(cb: types.CallbackQuery):
-    aid  = int(cb.data.replace("api_del_",""))
-    conn = db(); c = conn.cursor()
-    c.execute("DELETE FROM apis WHERE id=?", (aid,))
-    conn.commit(); conn.close()
-    await cb.message.answer("✅ API o'chirildi!"); await cb.answer()
-
-# ── Foydalanuvchini boshqarish ─────────────────────────────
+# ── Foydalanuvchini boshqarish ────────────────────────────
 @dp.message(F.text == "👩‍💻 Foydalanuvchini boshqarish")
-async def user_mgmt(msg: types.Message, state: FSMContext):
+async def admin_users(msg: types.Message, state: FSMContext):
     if msg.from_user.id not in ADMIN_IDS: return
     await state.set_state(AS.user_id_input)
-    await msg.answer("🆔 Foydalanuvchining ID raqamini yuboring:", reply_markup=cancel_kb())
+    await msg.answer("👤 Foydalanuvchi ID sini kiriting:", reply_markup=cancel_kb())
 
 @dp.message(AS.user_id_input)
-async def get_user_info(msg: types.Message, state: FSMContext):
+async def do_user_manage(msg: types.Message, state: FSMContext):
     if msg.text == "❌ Bekor qilish":
         await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
-    try: uid = int(msg.text)
-    except: await msg.answer("❌ Noto'g'ri ID"); return
+    try:
+        uid = int(msg.text)
+    except:
+        await msg.answer("❌ Noto'g'ri ID"); return
     u = get_user(uid)
-    if not u: await msg.answer("❌ Foydalanuvchi topilmadi"); return
+    if not u:
+        await msg.answer("❌ Foydalanuvchi topilmadi"); await state.clear(); return
+    await state.clear()
     b = InlineKeyboardBuilder()
     b.button(text="➕ Balans qo'shish", callback_data=f"uadd_{uid}")
     b.button(text="➖ Balans ayirish",  callback_data=f"usub_{uid}")
-    b.button(text="📨 Xabar yuborish",  callback_data=f"umsg_{uid}")
+    b.button(text="📩 Xabar yuborish",  callback_data=f"umsg_{uid}")
     b.adjust(2)
-    await state.clear()
     await msg.answer(
-        f"👤 {u[2]}\n🆔 {u[0]}\n💵 {u[3]:.0f} {cur()}\n"
-        f"📊 Buyurtmalar: {orders_count(uid)}\n👥 Referallar: {u[5]}",
+        f"👤 {u[2] or 'Nomsiz'}\n"
+        f"🆔 ID: {u[0]}\n"
+        f"💵 Balans: {u[3]:.2f} {cur()}\n"
+        f"📊 Buyurtmalar: {orders_count(uid)} ta\n"
+        f"👥 Referallar: {u[5]} ta",
         reply_markup=b.as_markup()
     )
 
 @dp.callback_query(F.data.startswith("uadd_"))
 async def u_add(cb: types.CallbackQuery, state: FSMContext):
-    uid = int(cb.data.replace("uadd_",""))
+    uid = int(cb.data.replace("uadd_", ""))
     await state.update_data(target_uid=uid, bal_action="add")
     await state.set_state(AS.balance_amount)
     await cb.message.answer("💰 Qo'shmoqchi bo'lgan miqdor:", reply_markup=cancel_kb())
@@ -1610,7 +1204,7 @@ async def u_add(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("usub_"))
 async def u_sub(cb: types.CallbackQuery, state: FSMContext):
-    uid = int(cb.data.replace("usub_",""))
+    uid = int(cb.data.replace("usub_", ""))
     await state.update_data(target_uid=uid, bal_action="sub")
     await state.set_state(AS.balance_amount)
     await cb.message.answer("💰 Ayirmoqchi bo'lgan miqdor:", reply_markup=cancel_kb())
@@ -1618,7 +1212,7 @@ async def u_sub(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("umsg_"))
 async def u_msg(cb: types.CallbackQuery, state: FSMContext):
-    uid = int(cb.data.replace("umsg_",""))
+    uid = int(cb.data.replace("umsg_", ""))
     await state.update_data(single_uid=uid)
     await state.set_state(AS.broadcast_uid_msg)
     await cb.message.answer(f"📝 {uid} ga xabar matnini kiriting:", reply_markup=cancel_kb())
@@ -1638,20 +1232,223 @@ async def do_balance(msg: types.Message, state: FSMContext):
         c.execute("UPDATE users SET balance=balance+? WHERE user_id=?", (amount, uid))
         c.execute("INSERT INTO transactions(user_id,amount,type,description) VALUES(?,?,?,?)",
                   (uid, amount, "admin_add", "Admin tomonidan qo'shildi"))
-        try: await bot.send_message(uid, f"✅ Hisobingizga {amount:.0f} {cur()} qo'shildi!")
+        try: await bot.send_message(uid, f"✅ Hisobingizga {amount:.2f} {cur()} qo'shildi!")
         except: pass
     else:
         c.execute("UPDATE users SET balance=balance-? WHERE user_id=?", (amount, uid))
         c.execute("INSERT INTO transactions(user_id,amount,type,description) VALUES(?,?,?,?)",
                   (uid, -amount, "admin_sub", "Admin tomonidan ayirildi"))
-        try: await bot.send_message(uid, f"⚠️ Hisobingizdan {amount:.0f} {cur()} ayirildi!")
+        try: await bot.send_message(uid, f"⚠️ Hisobingizdan {amount:.2f} {cur()} ayirildi!")
         except: pass
     conn.commit(); conn.close()
-    act_text = "qo'shildi" if action=="add" else "ayirildi"
+    act_text = "qo'shildi" if action == "add" else "ayirildi"
     await state.clear()
-    await msg.answer(f"✅ {uid} ga {amount:.0f} {cur()} {act_text}!", reply_markup=admin_kb())
+    await msg.answer(f"✅ {uid} ga {amount:.2f} {cur()} {act_text}!", reply_markup=admin_kb())
 
-# ── Qo'llanmalar (Admin) ────────────────────────────────────
+# ── Majbur obuna ──────────────────────────────────────────
+@dp.message(F.text == "🔒 Majbur obuna kanallar")
+async def forced_channels(msg: types.Message):
+    if msg.from_user.id not in ADMIN_IDS: return
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT id,channel_name,channel_id FROM channels")
+    chs = c.fetchall(); conn.close()
+    b = InlineKeyboardBuilder()
+    for cid, cname, ch_id in chs:
+        b.button(text=f"🗑 {cname}", callback_data=f"del_ch_{cid}")
+    b.button(text="➕ Kanal qo'shish", callback_data="add_channel")
+    b.adjust(1)
+    await msg.answer(f"📢 Kanallar: {len(chs)} ta", reply_markup=b.as_markup())
+
+@dp.callback_query(F.data == "add_channel")
+async def start_add_channel(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await state.set_state(AS.add_channel)
+    await cb.message.answer(
+        "📢 Kanal ma'lumotlarini quyidagi formatda yuboring:\n\n"
+        "<code>@kanal_username | Kanal Nomi | https://t.me/kanal_link</code>",
+        parse_mode="HTML", reply_markup=cancel_kb()
+    )
+    await cb.answer()
+
+@dp.message(AS.add_channel)
+async def do_add_channel(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    parts = [p.strip() for p in msg.text.split("|")]
+    if len(parts) != 3:
+        await msg.answer("❌ Format noto'g'ri. Qayta kiriting:"); return
+    conn = db(); c = conn.cursor()
+    c.execute("INSERT INTO channels(channel_id,channel_name,channel_link) VALUES(?,?,?)",
+              (parts[0], parts[1], parts[2]))
+    conn.commit(); conn.close()
+    await state.clear()
+    await msg.answer(f"✅ Kanal qo'shildi: {parts[1]}", reply_markup=admin_kb())
+
+@dp.callback_query(F.data.startswith("del_ch_"))
+async def del_ch(cb: types.CallbackQuery):
+    cid = int(cb.data.replace("del_ch_", ""))
+    conn = db(); c = conn.cursor()
+    c.execute("DELETE FROM channels WHERE id=?", (cid,))
+    conn.commit(); conn.close()
+    await cb.message.answer("✅ Kanal o'chirildi!"); await cb.answer()
+
+# ── To'lov tizimlari ──────────────────────────────────────
+@dp.message(F.text == "💳 To'lov tizimlar")
+async def payment_methods(msg: types.Message):
+    if msg.from_user.id not in ADMIN_IDS: return
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT id,name,card_number,is_active FROM manual_payments")
+    pays = c.fetchall(); conn.close()
+    b = InlineKeyboardBuilder()
+    for pid, pname, pcard, pact in pays:
+        st = "✅" if pact else "❌"
+        b.button(text=f"{st} {pname} — {pcard[:8]}...", callback_data=f"pay_tog_{pid}")
+    b.button(text="➕ To'lov qo'shish", callback_data="add_mpay")
+    b.adjust(1)
+    await msg.answer(f"💳 To'lov tizimlari: {len(pays)} ta", reply_markup=b.as_markup())
+
+@dp.callback_query(F.data == "add_mpay")
+async def add_mpay(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await state.set_state(AS.mpay_name)
+    await cb.message.answer("💳 To'lov nomi (masalan: Click, Payme):", reply_markup=cancel_kb())
+    await cb.answer()
+
+@dp.message(AS.mpay_name)
+async def mpay_name(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    await state.update_data(mpay_name=msg.text)
+    await state.set_state(AS.mpay_card)
+    await msg.answer("🔢 Karta raqami:")
+
+@dp.message(AS.mpay_card)
+async def mpay_card(msg: types.Message, state: FSMContext):
+    await state.update_data(mpay_card=msg.text)
+    await state.set_state(AS.mpay_expiry)
+    await msg.answer("📅 Amal qilish muddati (masalan: 12/26):")
+
+@dp.message(AS.mpay_expiry)
+async def mpay_expiry(msg: types.Message, state: FSMContext):
+    await state.update_data(mpay_expiry=msg.text)
+    await state.set_state(AS.mpay_holder)
+    await msg.answer("👤 Karta egasi (to'liq ismi):")
+
+@dp.message(AS.mpay_holder)
+async def mpay_holder(msg: types.Message, state: FSMContext):
+    data = await state.get_data()
+    conn = db(); c = conn.cursor()
+    c.execute("INSERT INTO manual_payments(name,card_number,card_expiry,card_holder) VALUES(?,?,?,?)",
+              (data["mpay_name"], data["mpay_card"], data["mpay_expiry"], msg.text))
+    conn.commit(); conn.close()
+    await state.clear()
+    await msg.answer(f"✅ To'lov tizimi qo'shildi: {data['mpay_name']}", reply_markup=admin_kb())
+
+@dp.callback_query(F.data.startswith("pay_tog_"))
+async def pay_toggle(cb: types.CallbackQuery):
+    pid = int(cb.data.replace("pay_tog_", ""))
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT is_active FROM manual_payments WHERE id=?", (pid,))
+    v = c.fetchone()[0]
+    c.execute("UPDATE manual_payments SET is_active=? WHERE id=?", (0 if v else 1, pid))
+    conn.commit(); conn.close()
+    await cb.answer("✅ O'zgartirildi!")
+
+# ── API boshqaruvi ────────────────────────────────────────
+@dp.message(F.text == "🔑 API")
+async def api_menu(msg: types.Message):
+    if msg.from_user.id not in ADMIN_IDS: return
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT id,name,url FROM apis")
+    apis = c.fetchall(); conn.close()
+    b = InlineKeyboardBuilder()
+    for aid, aname, aurl in apis:
+        b.button(text=f"🔑 {aname}", callback_data=f"api_{aid}")
+    b.button(text="➕ API qo'shish", callback_data="api_add")
+    b.adjust(1)
+    await msg.answer(f"🔑 API lar: {len(apis)} ta", reply_markup=b.as_markup())
+
+@dp.callback_query(F.data == "api_add")
+async def api_add(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await state.set_state(AS.api_name)
+    await cb.message.answer("🔑 API nomi:", reply_markup=cancel_kb())
+    await cb.answer()
+
+@dp.message(AS.api_name)
+async def api_name_h(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    await state.update_data(api_name=msg.text)
+    await state.set_state(AS.api_url)
+    await msg.answer("🌐 API URL (masalan: https://panel.uz/api/v2):")
+
+@dp.message(AS.api_url)
+async def api_url_h(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    await state.update_data(api_url=msg.text)
+    await state.set_state(AS.api_key)
+    await msg.answer("🔐 API kaliti (key):")
+
+@dp.message(AS.api_key)
+async def api_key_h(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    data = await state.get_data()
+    conn = db(); c = conn.cursor()
+    c.execute("INSERT INTO apis(name,url,api_key) VALUES(?,?,?)",
+              (data["api_name"], data["api_url"], msg.text))
+    aid = c.lastrowid
+    conn.commit(); conn.close()
+    await state.clear()
+    await msg.answer(f"✅ API qo'shildi: {data['api_name']}\n🆔 ID: {aid}", reply_markup=admin_kb())
+
+@dp.callback_query(F.data.startswith("api_") & ~F.data.startswith("api_add") & ~F.data.startswith("api_del_"))
+async def api_detail(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    try:
+        aid = int(cb.data.replace("api_", ""))
+    except:
+        await cb.answer(); return
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT * FROM apis WHERE id=?", (aid,))
+    api = c.fetchone(); conn.close()
+    if not api: await cb.answer("❌ Topilmadi"); return
+    b = InlineKeyboardBuilder()
+    b.button(text="💰 Balansni ko'rish", callback_data=f"api_bal_{aid}")
+    b.button(text="🗑 O'chirish",         callback_data=f"api_del_{aid}")
+    b.adjust(2)
+    await cb.message.answer(
+        f"🔑 {api[1]}\n🌐 {api[2]}\n🔐 {api[3][:15]}...",
+        reply_markup=b.as_markup()
+    )
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("api_bal_"))
+async def api_bal(cb: types.CallbackQuery):
+    aid  = int(cb.data.replace("api_bal_", ""))
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT url,api_key FROM apis WHERE id=?", (aid,))
+    api = c.fetchone(); conn.close()
+    if not api: await cb.answer("❌ Topilmadi"); return
+    bal, cur_val = await api_balance(api[0], api[1])
+    if bal is None:
+        await cb.answer("❌ API ga ulanib bo'lmadi", show_alert=True)
+    else:
+        await cb.message.answer(f"💰 API balansi: {bal:.2f} {cur_val}")
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("api_del_"))
+async def api_del(cb: types.CallbackQuery):
+    aid  = int(cb.data.replace("api_del_", ""))
+    conn = db(); c = conn.cursor()
+    c.execute("DELETE FROM apis WHERE id=?", (aid,))
+    conn.commit(); conn.close()
+    await cb.message.answer("✅ API o'chirildi!")
+    await cb.answer()
+
+# ── Qo'llanmalar (Admin) ─────────────────────────────────
 @dp.message(F.text == "📚 Qo'llanmalar")
 async def admin_guides(msg: types.Message):
     if msg.from_user.id not in ADMIN_IDS: return
@@ -1691,32 +1488,32 @@ async def guide_content_h(msg: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("del_guide_"))
 async def del_guide(cb: types.CallbackQuery):
-    gid = int(cb.data.replace("del_guide_",""))
+    gid = int(cb.data.replace("del_guide_", ""))
     conn = db(); c = conn.cursor()
     c.execute("DELETE FROM guides WHERE id=?", (gid,))
     conn.commit(); conn.close()
     await cb.message.answer("✅ Qo'llanma o'chirildi!"); await cb.answer()
 
-# ── Buyurtmalar (Admin) ────────────────────────────────────
+# ── Buyurtmalar (Admin) ──────────────────────────────────
 @dp.message(F.text == "📈 Buyurtmalar")
 async def admin_orders(msg: types.Message):
     if msg.from_user.id not in ADMIN_IDS: return
     conn = db(); c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM orders"); total = c.fetchone()[0]
     st = {}
-    for s in ("completed","cancelled","pending","processing","partial"):
+    for s in ("completed", "cancelled", "pending", "processing", "partial"):
         c.execute("SELECT COUNT(*) FROM orders WHERE status=?", (s,))
         st[s] = c.fetchone()[0]
     conn.close()
     b = InlineKeyboardBuilder()
-    b.button(text="🔍 Qidirish", callback_data="search_orders")
+    b.button(text="🔍 So'nggi buyurtmalar", callback_data="search_orders")
     await msg.answer(
         f"📈 Buyurtmalar: {total} ta\n\n"
         f"✅ Bajarilganlar: {st['completed']} ta\n"
         f"🚫 Bekor qilinganlar: {st['cancelled']} ta\n"
-        f"⏳ Bajarilayotganlar: {st['pending']} ta\n"
+        f"⏳ Kutilayotganlar: {st['pending']} ta\n"
         f"🔄 Jarayondagilar: {st['processing']} ta\n"
-        f"♻️ Qayta ishlanganlar: {st['partial']} ta",
+        f"♻️ Qisman: {st['partial']} ta",
         reply_markup=b.as_markup()
     )
 
@@ -1731,11 +1528,11 @@ async def search_orders(cb: types.CallbackQuery):
         await cb.message.answer("❌ Buyurtmalar yo'q"); await cb.answer(); return
     text = "📋 So'nggi 20 buyurtma:\n\n"
     for r in rows:
-        text += f"#{r[0]} | {r[2] or '?'} | {r[3]} dona | {r[4]:.0f} {cur()} | {r[5]}\n"
+        text += f"#{r[0]} | {r[2] or '?'} | {r[3]} ta | {r[4]:.2f} {cur()} | {r[5]}\n"
     await cb.message.answer(text[:4096]); await cb.answer()
 
 # ═══════════════════════════════════════════════════════════
-#  ADMIN — Xizmatlar (Services)
+#  ADMIN — 📁 Xizmatlar
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "📁 Xizmatlar")
 async def svc_home(msg: types.Message):
@@ -1749,41 +1546,76 @@ async def svc_home(msg: types.Message):
         [KeyboardButton(text="🛠 Barcha xizmatlar")],
         [KeyboardButton(text="◀️ Orqaga")],
     ], resize_keyboard=True)
-    await msg.answer(f"📁 Xizmatlar\n📂 Bo'limlar: {nc} ta\n🛠 Xizmatlar: {ns} ta", reply_markup=kb)
+    await msg.answer(
+        f"📁 Xizmatlar boshqaruvi\n\n"
+        f"📂 Bo'limlar: {nc} ta\n"
+        f"🛠 Xizmatlar: {ns} ta\n\n"
+        f"Bo'lim qo'shishda platforma (Telegram, Instagram...) tanlanadi.",
+        reply_markup=kb
+    )
 
-# ── Bo'limlar ─────────────────────────────────────────────
+# ── Bo'limlar boshqaruvi ──────────────────────────────────
 @dp.message(F.text == "📂 Bo'limlar")
 async def cat_menu(msg: types.Message):
     if msg.from_user.id not in ADMIN_IDS: return
     conn = db(); c = conn.cursor()
-    c.execute("SELECT id,name,is_active FROM categories")
+    c.execute("SELECT id,name,platform,is_active FROM categories ORDER BY platform,name")
     cats = c.fetchall(); conn.close()
     b = InlineKeyboardBuilder()
-    for cid, cname, cact in cats:
+    for cid, cname, cplat, cact in cats:
         status = "✅" if cact else "❌"
-        b.button(text=f"{status} {cname}", callback_data=f"cat_{cid}")
+        plat_icon = {"telegram": "✈️", "instagram": "📸", "youtube": "▶️", "tiktok": "🎵"}.get(cplat, "📁")
+        b.button(text=f"{status} {plat_icon} {cname}", callback_data=f"cat_{cid}")
     b.button(text="➕ Bo'lim qo'shish", callback_data="cat_add")
     b.adjust(2)
     await msg.answer(f"📂 Bo'limlar: {len(cats)} ta", reply_markup=b.as_markup())
 
+# ─── Bo'lim qo'shish: 1-platforma tanlash ──────────────────
 @dp.callback_query(F.data == "cat_add")
 async def cat_add(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
+    b = InlineKeyboardBuilder()
+    b.button(text="✈️ Telegram",  callback_data="newcat_plat_telegram")
+    b.button(text="📸 Instagram", callback_data="newcat_plat_instagram")
+    b.button(text="▶️ Youtube",   callback_data="newcat_plat_youtube")
+    b.button(text="🎵 Tik tok",   callback_data="newcat_plat_tiktok")
+    b.adjust(2)
+    try:
+        await cb.message.edit_text("📂 Qaysi platforma uchun bo'lim qo'shmoqchisiz?",
+                                   reply_markup=b.as_markup())
+    except Exception:
+        await cb.message.answer("📂 Qaysi platforma uchun bo'lim qo'shmoqchisiz?",
+                                reply_markup=b.as_markup())
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("newcat_plat_"))
+async def cat_add_platform(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    platform = cb.data.replace("newcat_plat_", "")
+    plat_name = PLATFORMS.get(platform, platform)
+    await state.update_data(new_cat_platform=platform)
     await state.set_state(AS.add_category)
-    await cb.message.answer("📂 Bo'lim nomini kiriting:", reply_markup=cancel_kb())
+    await cb.message.answer(
+        f"✅ Platforma: {plat_name}\n\n📂 Bo'lim nomini kiriting:",
+        reply_markup=cancel_kb()
+    )
     await cb.answer()
 
 @dp.message(AS.add_category)
 async def do_cat_add(msg: types.Message, state: FSMContext):
     if msg.text == "❌ Bekor qilish":
         await state.clear(); await cat_menu(msg); return
+    data     = await state.get_data()
+    platform = data.get("new_cat_platform", "telegram")
+    plat_name = PLATFORMS.get(platform, platform)
     conn = db(); c = conn.cursor()
-    c.execute("INSERT INTO categories(name) VALUES(?)", (msg.text,))
+    c.execute("INSERT INTO categories(name,platform) VALUES(?,?)", (msg.text, platform))
     conn.commit(); conn.close()
     await state.clear()
-    await msg.answer(f"✅ '{msg.text}' bo'limi qo'shildi!")
+    await msg.answer(f"✅ '{msg.text}' bo'limi {plat_name} uchun qo'shildi!")
     await cat_menu(msg)
 
+# ─── Bo'lim detali ──────────────────────────────────────────
 @dp.callback_query(
     F.data.startswith("cat_") &
     ~F.data.startswith("cat_add") &
@@ -1795,25 +1627,31 @@ async def do_cat_add(msg: types.Message, state: FSMContext):
 async def cat_detail(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
     try:
-        cid = int(cb.data.replace("cat_",""))
+        cid = int(cb.data.replace("cat_", ""))
     except ValueError:
         await cb.answer(); return
     conn = db(); c = conn.cursor()
-    c.execute("SELECT id,name,is_active FROM categories WHERE id=?", (cid,))
+    c.execute("SELECT id,name,platform,is_active FROM categories WHERE id=?", (cid,))
     cat  = c.fetchone()
     c.execute("SELECT COUNT(*) FROM services WHERE category_id=?", (cid,))
     ns   = c.fetchone()[0]
     conn.close()
     if not cat: await cb.answer("❌ Topilmadi"); return
-    status = "✅ Faol" if cat[2] else "❌ Nofaol"
+    status = "✅ Faol" if cat[3] else "❌ Nofaol"
+    plat_name = PLATFORMS.get(cat[2], cat[2])
     b = InlineKeyboardBuilder()
-    toggle = "❌ O'chirish" if cat[2] else "✅ Faollashtirish"
+    toggle = "❌ O'chirish" if cat[3] else "✅ Faollashtirish"
     b.button(text=toggle,                  callback_data=f"cat_tog_{cid}")
     b.button(text="➕ Xizmat qo'shish",    callback_data=f"cat_svc_add_{cid}")
     b.button(text="📋 Xizmatlar ro'yhati", callback_data=f"cat_svcs_{cid}")
     b.button(text="🗑 Bo'limni o'chirish",  callback_data=f"cat_del_{cid}")
     b.adjust(2)
-    text = f"📂 {cat[1]}\nHolat: {status}\nXizmatlar: {ns} ta"
+    text = (
+        f"📂 {cat[1]}\n"
+        f"📱 Platforma: {plat_name}\n"
+        f"Holat: {status}\n"
+        f"Xizmatlar: {ns} ta"
+    )
     try:
         await cb.message.edit_text(text, reply_markup=b.as_markup())
     except Exception:
@@ -1822,18 +1660,19 @@ async def cat_detail(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("cat_tog_"))
 async def cat_toggle(cb: types.CallbackQuery):
-    cid  = int(cb.data.replace("cat_tog_",""))
+    cid  = int(cb.data.replace("cat_tog_", ""))
     conn = db(); c = conn.cursor()
     c.execute("SELECT is_active FROM categories WHERE id=?", (cid,))
     cur_val = c.fetchone()[0]
     new_val = 0 if cur_val else 1
     c.execute("UPDATE categories SET is_active=? WHERE id=?", (new_val, cid))
-    c.execute("SELECT name FROM categories WHERE id=?", (cid,))
-    cat_name = c.fetchone()[0]
+    c.execute("SELECT name,platform FROM categories WHERE id=?", (cid,))
+    cat_row = c.fetchone()
     c.execute("SELECT COUNT(*) FROM services WHERE category_id=?", (cid,))
     ns = c.fetchone()[0]
     conn.commit(); conn.close()
     status = "✅ Faol" if new_val else "❌ Nofaol"
+    plat_name = PLATFORMS.get(cat_row[1], cat_row[1])
     b = InlineKeyboardBuilder()
     toggle = "❌ O'chirish" if new_val else "✅ Faollashtirish"
     b.button(text=toggle,                  callback_data=f"cat_tog_{cid}")
@@ -1843,7 +1682,7 @@ async def cat_toggle(cb: types.CallbackQuery):
     b.adjust(2)
     try:
         await cb.message.edit_text(
-            f"📂 {cat_name}\nHolat: {status}\nXizmatlar: {ns} ta",
+            f"📂 {cat_row[0]}\n📱 Platforma: {plat_name}\nHolat: {status}\nXizmatlar: {ns} ta",
             reply_markup=b.as_markup()
         )
     except Exception:
@@ -1852,7 +1691,7 @@ async def cat_toggle(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("cat_del_"))
 async def cat_del(cb: types.CallbackQuery):
-    cid  = int(cb.data.replace("cat_del_",""))
+    cid  = int(cb.data.replace("cat_del_", ""))
     conn = db(); c = conn.cursor()
     c.execute("DELETE FROM categories WHERE id=?", (cid,))
     c.execute("DELETE FROM services WHERE category_id=?", (cid,))
@@ -1867,7 +1706,7 @@ async def cat_del(cb: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("cat_svc_add_"))
 async def svc_add_step1(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
-    cat_id = int(cb.data.replace("cat_svc_add_",""))
+    cat_id = int(cb.data.replace("cat_svc_add_", ""))
     conn   = db(); c = conn.cursor()
     c.execute("SELECT id,name FROM apis")
     apis   = c.fetchall(); conn.close()
@@ -1886,13 +1725,13 @@ async def svc_add_step1(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("svc_api_"))
 async def svc_add_step2(cb: types.CallbackQuery, state: FSMContext):
-    api_id = int(cb.data.replace("svc_api_",""))
+    api_id = int(cb.data.replace("svc_api_", ""))
     await state.update_data(new_svc_api=api_id)
     await state.set_state(AS.svc_api_id)
     text = (
         "🔢 API xizmat ID sini kiriting:\n\n"
-        "💡 Misol: 1, 15, 234 ...\n"
-        "📋 ID ni bilish uchun: Admin → API → Xizmatlarni ko'rish"
+        "💡 Misol: 268, 15, 1024 ...\n"
+        "📋 ID ni bilish uchun API panelidan xizmatlar ro'yxatiga qarang."
     )
     try:
         await cb.message.edit_text(text, reply_markup=None)
@@ -1905,69 +1744,50 @@ async def svc_add_step3(msg: types.Message, state: FSMContext):
     if msg.text == "❌ Bekor qilish":
         await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
 
-    api_svc_id = msg.text.strip()
-    await state.update_data(new_svc_api_id=api_svc_id)
-    data   = await state.get_data()
+    api_service_id = msg.text.strip()
+    data = await state.get_data()
     api_id = data["new_svc_api"]
 
+    # API dan xizmat ma'lumotlarini olish
     conn = db(); c = conn.cursor()
     c.execute("SELECT url,api_key FROM apis WHERE id=?", (api_id,))
-    api  = c.fetchone(); conn.close()
+    api_row = c.fetchone(); conn.close()
 
-    prefill = {}
-    if api:
-        wait_msg = await msg.answer("⏳ API dan xizmat qidirilmoqda...")
-        svcs = await api_services(api[0], api[1])
-        try: await wait_msg.delete()
-        except: pass
-        if svcs:
+    prefill = {"name": f"Xizmat #{api_service_id}", "min": 100, "max": 10000, "price": 0}
+
+    if api_row:
+        svcs = await api_services(api_row[0], api_row[1])
+        if svcs and isinstance(svcs, list):
             for s in svcs:
-                if str(s.get("service", s.get("id",""))) == api_svc_id:
-                    prefill = {
-                        "name":     s.get("name",""),
-                        "category": s.get("category",""),
-                        "type":     s.get("type",""),
-                        "min":      int(s.get("min", 100)),
-                        "max":      int(s.get("max", 10000)),
-                        "price":    round(float(s.get("rate", 0)) * 1000, 2),
-                        "refill":   s.get("refill", False),
-                        "cancel":   s.get("cancel", False),
-                    }
+                sid = str(s.get("service", s.get("id", "")))
+                if sid == str(api_service_id):
+                    prefill["name"]  = s.get("name", prefill["name"])
+                    prefill["min"]   = int(float(s.get("min", 100)))
+                    prefill["max"]   = int(float(s.get("max", 10000)))
+                    prefill["price"] = float(s.get("rate", s.get("price", 0)))
                     break
 
-    await state.update_data(prefill=prefill)
+    await state.update_data(new_svc_api_id=api_service_id, prefill=prefill)
 
-    if prefill:
-        # Avtomatik to'ldirilgan — tasdiqlash tugmalari
-        b = InlineKeyboardBuilder()
-        b.button(text="✅ Shunday saqlash",    callback_data="svc_confirm_auto")
-        b.button(text="✏️ Nomni o'zgartirish", callback_data="svc_edit_name")
-        b.adjust(1)
-        refill_txt = "Ha" if prefill['refill'] else "Yoq"
-        cancel_txt = "Ha" if prefill['cancel'] else "Yoq"
-        await msg.answer(
-            f"✅ Xizmat topildi!\n\n"
-            f"📌 Nomi: {prefill['name']}\n"
-            f"📁 Kategoriya: {prefill.get('category','—')}\n"
-            f"🔖 Turi: {prefill.get('type','—')}\n"
-            f"📊 Min: {prefill['min']}  |  Max: {prefill['max']}\n"
-            f"💰 Narx: {prefill['price']:.2f} {cur()}/1000\n"
-            f"🔄 Refill: {refill_txt}  |  ❌ Cancel: {cancel_txt}\n\n"
-            f"Quyidagilardan birini tanlang:",
-            reply_markup=b.as_markup()
-        )
-    else:
-        await state.set_state(AS.svc_name)
-        await msg.answer(
-            f"⚠️ ID <b>{api_svc_id}</b> topilmadi yoki API ulanmadi.\n\n"
-            f"📌 Xizmat nomini qo'lda kiriting:",
-            parse_mode="HTML",
-            reply_markup=cancel_kb()
-        )
+    # Oldindan to'ldirilgan ma'lumotlar bilan tasdiqlash
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Tasdiqlash va saqlash", callback_data="svc_confirm_save")
+    b.button(text="✏️ Nomni o'zgartirish",   callback_data="svc_edit_name")
+    b.adjust(1)
 
-@dp.callback_query(F.data == "svc_confirm_auto")
-async def svc_confirm_auto(cb: types.CallbackQuery, state: FSMContext):
-    """Avtomatik to'ldirilgan ma'lumotlar bilan saqlash"""
+    await msg.answer(
+        f"📋 Xizmat ma'lumotlari:\n\n"
+        f"🔢 API ID: {api_service_id}\n"
+        f"📌 Nomi: {prefill['name']}\n"
+        f"💰 Narx (1000x): {prefill['price']:.2f} {cur()}\n"
+        f"⬇️ Minimal: {prefill['min']} ta\n"
+        f"⬆️ Maksimal: {prefill['max']} ta\n\n"
+        f"Saqlaymizmi?",
+        reply_markup=b.as_markup()
+    )
+
+@dp.callback_query(F.data == "svc_confirm_save")
+async def svc_confirm_save(cb: types.CallbackQuery, state: FSMContext):
     data    = await state.get_data()
     prefill = data.get("prefill", {})
     cat_id  = data["new_svc_cat"]
@@ -1976,13 +1796,13 @@ async def svc_confirm_auto(cb: types.CallbackQuery, state: FSMContext):
     c.execute("""INSERT INTO services(category_id,api_id,api_service_id,name,min_qty,max_qty,price_per1000)
                  VALUES(?,?,?,?,?,?,?)""",
               (cat_id, data["new_svc_api"], data["new_svc_api_id"],
-               prefill["name"], prefill["min"], prefill["max"], prefill["price"]))
+               prefill.get("name",""), prefill.get("min",100),
+               prefill.get("max",10000), prefill.get("price",0)))
     c.execute("SELECT COUNT(*) FROM services WHERE category_id=?", (cat_id,))
     svc_count = c.fetchone()[0]
     c.execute("SELECT name FROM categories WHERE id=?", (cat_id,))
     cat_row = c.fetchone()
     conn.commit(); conn.close()
-
     cat_name = cat_row[0] if cat_row else "Bo'lim"
 
     b = InlineKeyboardBuilder()
@@ -1996,13 +1816,13 @@ async def svc_confirm_auto(cb: types.CallbackQuery, state: FSMContext):
             f"✅ Xizmat saqlandi!\n\n"
             f"📌 {prefill['name']}\n"
             f"💰 {prefill['price']:.2f} {cur()}/1000\n"
-            f"📊 Min: {prefill['min']}  |  Max: {prefill['max']}\n"
             f"📁 {cat_name}  ({svc_count} ta xizmat)",
             reply_markup=b.as_markup()
         )
     except Exception:
         await cb.message.answer(
-            f"✅ Xizmat saqlandi!\n\n📌 {prefill['name']}\n"
+            f"✅ Xizmat saqlandi!\n\n"
+            f"📌 {prefill['name']}\n"
             f"💰 {prefill['price']:.2f} {cur()}/1000\n"
             f"📁 {cat_name}  ({svc_count} ta xizmat)",
             reply_markup=b.as_markup()
@@ -2011,7 +1831,6 @@ async def svc_confirm_auto(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "svc_edit_name")
 async def svc_edit_name(cb: types.CallbackQuery, state: FSMContext):
-    """Nomni o'zgartirish uchun"""
     await state.set_state(AS.svc_name)
     try:
         await cb.message.edit_text("📌 Yangi nom kiriting:", reply_markup=None)
@@ -2025,74 +1844,30 @@ async def svc_add_name(msg: types.Message, state: FSMContext):
         await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
     data    = await state.get_data()
     prefill = data.get("prefill", {})
-    name    = prefill.get("name","") if msg.text == "/skip" else msg.text
-    await state.update_data(new_svc_name=name)
-    await state.set_state(AS.svc_min)
-    await msg.answer(f"📊 Minimal miqdor (default: {prefill.get('min',100)}, /skip):")
+    name    = prefill.get("name", "") if msg.text == "/skip" else msg.text
+    prefill["name"] = name
+    await state.update_data(prefill=prefill)
 
-@dp.message(AS.svc_min)
-async def svc_add_min(msg: types.Message, state: FSMContext):
-    data    = await state.get_data()
-    prefill = data.get("prefill", {})
-    try:    mn = int(msg.text) if msg.text != "/skip" else prefill.get("min", 100)
-    except: mn = prefill.get("min", 100)
-    await state.update_data(new_svc_min=mn)
-    await state.set_state(AS.svc_max)
-    await msg.answer(f"📊 Maksimal miqdor (default: {prefill.get('max',10000)}, /skip):")
-
-@dp.message(AS.svc_max)
-async def svc_add_max(msg: types.Message, state: FSMContext):
-    data    = await state.get_data()
-    prefill = data.get("prefill", {})
-    try:    mx = int(msg.text) if msg.text != "/skip" else prefill.get("max", 10000)
-    except: mx = prefill.get("max", 10000)
-    await state.update_data(new_svc_max=mx)
-    await state.set_state(AS.svc_price)
-    await msg.answer(f"💰 Narx 1000 ta uchun {cur()} da (default: {prefill.get('price',0)}, /skip):")
-
-@dp.message(AS.svc_price)
-async def svc_add_price(msg: types.Message, state: FSMContext):
-    data    = await state.get_data()
-    prefill = data.get("prefill", {})
-    try:    price = float(msg.text) if msg.text != "/skip" else prefill.get("price", 0)
-    except: price = prefill.get("price", 0)
-
-    cat_id = data["new_svc_cat"]
-
-    conn = db(); c = conn.cursor()
-    c.execute("""INSERT INTO services(category_id,api_id,api_service_id,name,min_qty,max_qty,price_per1000)
-                 VALUES(?,?,?,?,?,?,?)""",
-              (cat_id, data["new_svc_api"], data["new_svc_api_id"],
-               data["new_svc_name"], data["new_svc_min"], data["new_svc_max"], price))
-    # yangi qo'shilgan xizmat sonini olish
-    c.execute("SELECT COUNT(*) FROM services WHERE category_id=?", (cat_id,))
-    svc_count = c.fetchone()[0]
-    c.execute("SELECT name FROM categories WHERE id=?", (cat_id,))
-    cat_row = c.fetchone()
-    conn.commit(); conn.close()
-
-    cat_name = cat_row[0] if cat_row else "Bo'lim"
-
-    # Xizmat qo'shilgandan keyin yana qo'shish tugmasi
     b = InlineKeyboardBuilder()
-    b.button(text="➕ Yana xizmat qo'shish", callback_data=f"cat_svc_add_{cat_id}")
-    b.button(text="📋 Xizmatlar ro'yhati",   callback_data=f"cat_svcs_{cat_id}")
-    b.adjust(2)
+    b.button(text="✅ Tasdiqlash va saqlash", callback_data="svc_confirm_save")
+    b.button(text="✏️ Nomni o'zgartirish",   callback_data="svc_edit_name")
+    b.adjust(1)
 
-    await state.clear()
+    cat_id = data.get("new_svc_cat", 0)
     await msg.answer(
-        f"✅ Xizmat qo'shildi!\n\n"
-        f"📌 {data['new_svc_name']}\n"
-        f"💰 {price:.0f} {cur()}/1000\n"
-        f"📊 Min: {data['new_svc_min']}  |  Max: {data['new_svc_max']}\n"
-        f"📁 Bo'lim: {cat_name}  ({svc_count} ta xizmat)",
+        f"📋 Yangilangan ma'lumotlar:\n\n"
+        f"📌 Nomi: {prefill['name']}\n"
+        f"💰 Narx (1000x): {prefill.get('price',0):.2f} {cur()}\n"
+        f"⬇️ Minimal: {prefill.get('min',100)} ta\n"
+        f"⬆️ Maksimal: {prefill.get('max',10000)} ta\n\n"
+        f"Saqlaymizmi?",
         reply_markup=b.as_markup()
     )
 
-# ── Bo'limdagi xizmatlar ────────────────────────────────────
+# ── Bo'limdagi xizmatlar ro'yhati ────────────────────────
 @dp.callback_query(F.data.startswith("cat_svcs_"))
 async def cat_svcs(cb: types.CallbackQuery):
-    cid  = int(cb.data.replace("cat_svcs_",""))
+    cid  = int(cb.data.replace("cat_svcs_", ""))
     conn = db(); c = conn.cursor()
     c.execute("SELECT id,name,price_per1000,is_active FROM services WHERE category_id=?", (cid,))
     svcs = c.fetchall()
@@ -2105,7 +1880,7 @@ async def cat_svcs(cb: types.CallbackQuery):
     b = InlineKeyboardBuilder()
     for sid, sname, sprice, sact in svcs:
         st = "✅" if sact else "❌"
-        b.button(text=f"{st} {sname} — {sprice:.0f} {cur()}", callback_data=f"svc_{sid}")
+        b.button(text=f"{st} {sname} — {sprice:.2f} {cur()}", callback_data=f"admin_svc_{sid}")
     b.button(text="➕ Xizmat qo'shish", callback_data=f"cat_svc_add_{cid}")
     b.adjust(1)
     try:
@@ -2120,24 +1895,27 @@ async def cat_svcs(cb: types.CallbackQuery):
         )
     await cb.answer()
 
+# ── Barcha xizmatlar ─────────────────────────────────────
 @dp.message(F.text == "🛠 Barcha xizmatlar")
 async def all_svcs(msg: types.Message):
     if msg.from_user.id not in ADMIN_IDS: return
     conn = db(); c = conn.cursor()
-    c.execute("""SELECT s.id,s.name,s.price_per1000,s.is_active,cat.name
-                 FROM services s LEFT JOIN categories cat ON s.category_id=cat.id""")
+    c.execute("""SELECT s.id,s.name,s.price_per1000,s.is_active,cat.name,cat.platform
+                 FROM services s LEFT JOIN categories cat ON s.category_id=cat.id
+                 ORDER BY cat.platform, cat.name""")
     svcs = c.fetchall(); conn.close()
     if not svcs: await msg.answer("❌ Xizmatlar yo'q"); return
     b = InlineKeyboardBuilder()
-    for sid, sname, sprice, sact, cname in svcs:
+    for sid, sname, sprice, sact, cname, cplat in svcs:
         st = "✅" if sact else "❌"
-        b.button(text=f"{st} [{cname}] {sname} — {sprice:.0f} {cur()}", callback_data=f"svc_{sid}")
+        plat_icon = {"telegram": "✈️", "instagram": "📸", "youtube": "▶️", "tiktok": "🎵"}.get(cplat, "📁")
+        b.button(text=f"{st} {plat_icon} {sname} — {sprice:.2f} {cur()}", callback_data=f"admin_svc_{sid}")
     b.adjust(1)
     await msg.answer(f"📋 Barcha xizmatlar ({len(svcs)} ta):", reply_markup=b.as_markup())
 
-@dp.callback_query(F.data.startswith("svc_") & ~F.data.startswith("svc_api_"))
-async def svc_detail(cb: types.CallbackQuery):
-    sid  = int(cb.data.replace("svc_",""))
+@dp.callback_query(F.data.startswith("admin_svc_"))
+async def admin_svc_detail(cb: types.CallbackQuery):
+    sid  = int(cb.data.replace("admin_svc_", ""))
     conn = db(); c = conn.cursor()
     c.execute("SELECT * FROM services WHERE id=?", (sid,))
     svc  = c.fetchone(); conn.close()
@@ -2150,9 +1928,9 @@ async def svc_detail(cb: types.CallbackQuery):
     text = (
         f"🛠 {svc[4]}\n"
         f"Holat: {status}\n"
-        f"💰 {svc[7]:.0f} {cur()}/1000\n"
-        f"Min: {svc[5]}  |  Max: {svc[6]}\n"
-        f"API Xizmat ID: {svc[3]}"
+        f"💰 {svc[7]:.2f} {cur()}/1000\n"
+        f"⬇️ Min: {svc[5]} ta  |  ⬆️ Max: {svc[6]} ta\n"
+        f"🔢 API Xizmat ID: {svc[3]}"
     )
     try:
         await cb.message.edit_text(text, reply_markup=b.as_markup())
@@ -2162,7 +1940,7 @@ async def svc_detail(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("svc_tog_"))
 async def svc_toggle(cb: types.CallbackQuery):
-    sid  = int(cb.data.replace("svc_tog_",""))
+    sid  = int(cb.data.replace("svc_tog_", ""))
     conn = db(); c = conn.cursor()
     c.execute("SELECT is_active FROM services WHERE id=?", (sid,))
     v    = c.fetchone()[0]
@@ -2179,9 +1957,9 @@ async def svc_toggle(cb: types.CallbackQuery):
     try:
         await cb.message.edit_text(
             f"🛠 {svc[4]}\nHolat: {status}\n"
-            f"💰 {svc[7]:.0f} {cur()}/1000\n"
-            f"Min: {svc[5]}  |  Max: {svc[6]}\n"
-            f"API Xizmat ID: {svc[3]}",
+            f"💰 {svc[7]:.2f} {cur()}/1000\n"
+            f"⬇️ Min: {svc[5]} ta  |  ⬆️ Max: {svc[6]} ta\n"
+            f"🔢 API Xizmat ID: {svc[3]}",
             reply_markup=b.as_markup()
         )
     except Exception:
@@ -2190,7 +1968,7 @@ async def svc_toggle(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("svc_del_"))
 async def svc_del(cb: types.CallbackQuery):
-    sid  = int(cb.data.replace("svc_del_",""))
+    sid  = int(cb.data.replace("svc_del_", ""))
     conn = db(); c = conn.cursor()
     c.execute("DELETE FROM services WHERE id=?", (sid,))
     conn.commit(); conn.close()
