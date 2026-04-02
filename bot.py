@@ -283,6 +283,24 @@ async def api_order(url, key, service_id, link, qty):
         logger.error(f"api_order error: {e}")
         return None
 
+async def api_balance(url, key):
+    """API hisobidagi balansni olish"""
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, data={"key": key, "action": "balance"},
+                              timeout=aiohttp.ClientTimeout(total=10)) as r:
+                data = await r.json(content_type=None)
+                if isinstance(data, dict):
+                    # Turli API formatlarini qo'llab-quvvatlash
+                    bal = data.get("balance", data.get("funds", data.get("Balance", None)))
+                    cur_val = data.get("currency", data.get("Currency", "USD"))
+                    if bal is not None:
+                        return float(bal), str(cur_val)
+        return None, None
+    except Exception as e:
+        logger.error(f"api_balance error: {e}")
+        return None, None
+
 # ─────────────────────────────────────────────────────────────
 #  BOT
 # ─────────────────────────────────────────────────────────────
@@ -1213,41 +1231,63 @@ async def api_menu(msg: types.Message):
 @dp.callback_query(F.data == "api_add")
 async def add_api(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
-    await state.set_state(AS.api_name)
-    await cb.message.answer("🔑 API nomini kiriting:", reply_markup=cancel_kb())
-    await cb.answer()
-
-@dp.message(AS.api_name)
-async def api_name_h(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear(); await api_menu(msg); return
-    await state.update_data(api_name=msg.text)
     await state.set_state(AS.api_url)
-    await msg.answer("🌐 API URL kiriting (masalan: https://saleseen.uz/api/v2):")
+    await cb.message.answer(
+        "🌐 <b>API manzilini kiriting:</b>\n\n"
+        "Namuna: https://capitalsmmapi.uz/api/v2",
+        reply_markup=cancel_kb(),
+        parse_mode="HTML"
+    )
+    await cb.answer()
 
 @dp.message(AS.api_url)
 async def api_url_h(msg: types.Message, state: FSMContext):
-    await state.update_data(api_url=msg.text)
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await api_menu(msg); return
+    url = msg.text.strip()
+    await state.update_data(api_url=url)
     await state.set_state(AS.api_key)
-    await msg.answer("🔑 API kalitini kiriting:")
+    await msg.answer(
+        f"❗️ <a href='{url}'>{url}</a> muvaffaqiyatli qabul qilindi!\n\n"
+        f"🔑 <b>API kalitini kiriting:</b>",
+        parse_mode="HTML",
+        reply_markup=cancel_kb()
+    )
 
 @dp.message(AS.api_key)
 async def api_key_h(msg: types.Message, state: FSMContext):
-    await state.update_data(api_key=msg.text)
-    await state.set_state(AS.api_price)
-    await msg.answer(f"💰 Markup narxi 1000 ta uchun {cur()} da (0 = API narxi):")
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await api_menu(msg); return
+    api_key = msg.text.strip()
+    data    = await state.get_data()
+    url     = data["api_url"]
 
-@dp.message(AS.api_price)
-async def api_price_h(msg: types.Message, state: FSMContext):
-    try: price = float(msg.text)
-    except: price = 0
-    data = await state.get_data()
+    # URL dan nom olish (masalan: saleseen.uz)
+    try:
+        from urllib.parse import urlparse
+        auto_name = urlparse(url).netloc.replace("www.", "")
+    except:
+        auto_name = url[:30]
+
+    # Balansni API dan olish
+    balance, api_cur = await api_balance(url, api_key)
+
     conn = db(); c = conn.cursor()
     c.execute("INSERT INTO apis(name,url,api_key,price_per1000) VALUES(?,?,?,?)",
-              (data["api_name"], data["api_url"], data["api_key"], price))
+              (auto_name, url, api_key, 0))
     conn.commit(); conn.close()
     await state.clear()
-    await msg.answer(f"✅ {data['api_name']} API qo'shildi!", reply_markup=admin_kb())
+
+    if balance is not None:
+        bal_text = f"\n\n💰 <b>Balans:</b> {balance:.2f} {api_cur}"
+    else:
+        bal_text = ""
+
+    await msg.answer(
+        f"✅ <b>API muvaffaqiyatli qo'shildi!</b>{bal_text}",
+        parse_mode="HTML",
+        reply_markup=admin_kb()
+    )
 
 @dp.callback_query(F.data.startswith("api_det_"))
 async def api_detail(cb: types.CallbackQuery):
@@ -1257,15 +1297,18 @@ async def api_detail(cb: types.CallbackQuery):
     c.execute("SELECT * FROM apis WHERE id=?", (aid,))
     api  = c.fetchone(); conn.close()
     if not api: await cb.answer("❌ Topilmadi"); return
+    await cb.answer("⏳ Balans tekshirilmoqda...")
+    # Balansni olish
+    balance, api_cur = await api_balance(api[2], api[3])
+    bal_text = f"\n💵 Balans: {balance:.2f} {api_cur}" if balance is not None else "\n💵 Balans: aniqlanmadi"
     b = InlineKeyboardBuilder()
     b.button(text="📋 Xizmatlarni yuklash", callback_data=f"api_fetch_{aid}")
     b.button(text="🗑 O'chirish",            callback_data=f"api_del_{aid}")
     b.adjust(1)
     await cb.message.answer(
-        f"🔑 {api[1]}\n🌐 {api[2]}\n🔑 Key: {api[3][:12]}...\n💰 {api[4]:.0f} {cur()}/1000",
+        f"🔑 {api[1]}\n🌐 {api[2]}\n🔑 Key: {api[3][:12]}...{bal_text}",
         reply_markup=b.as_markup()
     )
-    await cb.answer()
 
 @dp.callback_query(F.data.startswith("api_fetch_"))
 async def api_fetch(cb: types.CallbackQuery):
