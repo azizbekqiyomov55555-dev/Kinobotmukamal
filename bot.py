@@ -208,13 +208,71 @@ def orders_count(uid):
     c.execute("SELECT COUNT(*) FROM orders WHERE user_id=?", (uid,))
     n = c.fetchone()[0]; conn.close(); return n
 
-async def auto_delete(message: types.Message, delay: int = 15):
+async def auto_delete(message: types.Message, delay: int = 10):
     """Xabarni delay sekunddan keyin o'chiradi"""
     await asyncio.sleep(delay)
     try:
         await message.delete()
     except Exception:
         pass
+
+async def delete_msg_by_id(chat_id: int, message_id: int, delay: int = 0):
+    """ID orqali xabarni o'chiradi"""
+    if delay:
+        await asyncio.sleep(delay)
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass
+
+async def check_order_status_loop(uid: int, order_id: int, api_order_id: str,
+                                   api_url: str, api_key: str):
+    """Buyurtma holatini API dan tekshirib, bajarilganda xabar yuboradi"""
+    max_checks = 120   # max 2 soat (60 sekunddan bir)
+    for _ in range(max_checks):
+        await asyncio.sleep(60)
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.post(
+                    api_url,
+                    data={"key": api_key, "action": "status", "order": api_order_id},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as r:
+                    res = await r.json(content_type=None)
+            status = res.get("status", "").lower() if isinstance(res, dict) else ""
+
+            if status in ("completed", "partial"):
+                # DB ni yangilash
+                conn = db(); c = conn.cursor()
+                c.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
+                conn.commit(); conn.close()
+                # Foydalanuvchiga xabar
+                emoji = "✅" if status == "completed" else "♻️"
+                stat_text = "bajarildi" if status == "completed" else "qisman bajarildi"
+                try:
+                    await bot.send_message(
+                        uid,
+                        f"{emoji} <b>#{order_id}</b> raqamli buyurtmangiz {stat_text}!",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+                return
+            elif status in ("cancelled", "fail"):
+                conn = db(); c = conn.cursor()
+                c.execute("UPDATE orders SET status='cancelled' WHERE id=?", (order_id,))
+                conn.commit(); conn.close()
+                try:
+                    await bot.send_message(
+                        uid,
+                        f"❌ <b>#{order_id}</b> raqamli buyurtmangiz bekor qilindi!",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
 
 # ─────────────────────────────────────────────────────────────
 #  STATES
@@ -387,8 +445,8 @@ async def cmd_start(msg: types.Message, state: FSMContext):
     if not get_user(uid):
         reg_user(uid, msg.from_user.username or "", msg.from_user.full_name or "", ref)
 
-    # /start buyrug'ini 15 sekundda o'chir
-    asyncio.create_task(auto_delete(msg, 15))
+    # /start buyrug'ini 10 sekundda o'chir
+    asyncio.create_task(auto_delete(msg, 10))
 
     if not await check_sub(uid):
         await msg.answer("⚠️ Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
@@ -724,8 +782,13 @@ async def start_order(cb: types.CallbackQuery, state: FSMContext):
     )
     try:
         await cb.message.edit_text(text, reply_markup=b.as_markup())
+        # Miqdor so'rash xabarining id sini saqlab qo'yamiz
+        await state.update_data(qty_ask_msg_id=cb.message.message_id,
+                                qty_ask_chat_id=cb.message.chat.id)
     except Exception:
-        await cb.message.answer(text)
+        sent = await cb.message.answer(text)
+        await state.update_data(qty_ask_msg_id=sent.message_id,
+                                qty_ask_chat_id=sent.chat.id)
     await cb.answer()
 
 # ─── Miqdor kiritildi → link so'rash ───────────────────────
@@ -734,6 +797,7 @@ async def enter_qty(msg: types.Message, state: FSMContext):
     if msg.text in ("❌ Bekor qilish", "◀️ Orqaga"):
         await state.clear()
         await msg.answer("Bekor qilindi", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
+        asyncio.create_task(auto_delete(msg, 10))
         return
     data = await state.get_data()
     svc  = data.get("svc")
@@ -746,8 +810,19 @@ async def enter_qty(msg: types.Message, state: FSMContext):
         if not (svc[5] <= qty <= svc[6]):
             raise ValueError
     except (ValueError, TypeError):
-        await msg.answer(f"❌ Miqdor {svc[5]} – {svc[6]} orasida bo'lishi kerak")
+        err = await msg.answer(f"❌ Miqdor {svc[5]} – {svc[6]} orasida bo'lishi kerak")
+        asyncio.create_task(auto_delete(msg, 10))
+        asyncio.create_task(auto_delete(err, 10))
         return
+
+    # Foydalanuvchi kiritgan miqdor xabarini 10 sekundda o'chir
+    asyncio.create_task(auto_delete(msg, 10))
+
+    # Avvalgi "miqdor so'rash" inline xabarini o'chir
+    qty_ask_msg_id  = data.get("qty_ask_msg_id")
+    qty_ask_chat_id = data.get("qty_ask_chat_id")
+    if qty_ask_msg_id and qty_ask_chat_id:
+        asyncio.create_task(delete_msg_by_id(qty_ask_chat_id, qty_ask_msg_id, delay=0))
 
     await state.update_data(qty=qty)
     await state.set_state(US.enter_link)
@@ -755,7 +830,7 @@ async def enter_qty(msg: types.Message, state: FSMContext):
     plat_name = data.get("plat_name", "")
     amount    = (qty / 1000) * svc[7]
 
-    await msg.answer(
+    sent = await msg.answer(
         f"{plat_name} - {svc[4]}\n\n"
         f"📊 Miqdor: {qty} ta\n"
         f"💰 Narx: {amount:.2f} {cur()}\n\n"
@@ -765,6 +840,9 @@ async def enter_qty(msg: types.Message, state: FSMContext):
             resize_keyboard=True
         )
     )
+    # Link so'rash xabar id sini saqla (link kiritilganda o'chir)
+    await state.update_data(link_ask_msg_id=sent.message_id,
+                            link_ask_chat_id=sent.chat.id)
 
 # ─── Link kiritildi → tasdiqlash ────────────────────────────
 @dp.message(US.enter_link)
@@ -772,36 +850,63 @@ async def enter_link(msg: types.Message, state: FSMContext):
     if msg.text in ("❌ Bekor qilish", "◀️ Orqaga"):
         data = await state.get_data()
         svc  = data.get("svc")
+        # Link so'rash xabarini o'chir
+        link_ask_id   = data.get("link_ask_msg_id")
+        link_ask_chat = data.get("link_ask_chat_id")
+        if link_ask_id and link_ask_chat:
+            asyncio.create_task(delete_msg_by_id(link_ask_chat, link_ask_id))
+        asyncio.create_task(auto_delete(msg, 10))
         await state.set_state(US.enter_quantity)
         if svc:
             plat_name = data.get("plat_name", "")
             b = InlineKeyboardBuilder()
             b.button(text="◀️ Orqaga", callback_data=f"sel_svc_{svc[0]}")
-            await msg.answer(
+            sent = await msg.answer(
                 f"{plat_name} - {svc[4]}\n\n"
                 f"🔢 Buyurtma miqdorini kiriting:\n\n"
                 f"⬇️ Minimal: {svc[5]} ta\n"
                 f"⬆️ Maksimal: {svc[6]} ta",
                 reply_markup=b.as_markup()
             )
+            await state.update_data(qty_ask_msg_id=sent.message_id,
+                                    qty_ask_chat_id=sent.chat.id)
         else:
             await msg.answer("Bekor qilindi", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
         return
 
-    if not msg.text.startswith("http"):
-        await msg.answer("❌ Link https:// yoki http:// bilan boshlanishi kerak"); return
+    # Link tekshirish
+    link_text = msg.text or ""
+    if msg.entities:
+        for ent in msg.entities:
+            if ent.type == "url":
+                link_text = msg.text[ent.offset:ent.offset + ent.length]
+                break
+    if not link_text.startswith("http"):
+        err = await msg.answer("❌ Link https:// yoki http:// bilan boshlanishi kerak")
+        asyncio.create_task(auto_delete(msg, 10))
+        asyncio.create_task(auto_delete(err, 10))
+        return
 
-    data     = await state.get_data()
-    svc      = data["svc"]
-    qty      = data["qty"]
-    amount   = (qty / 1000) * svc[7]
-    u        = get_user(msg.from_user.id)
+    data      = await state.get_data()
+    svc       = data["svc"]
+    qty       = data["qty"]
+    amount    = (qty / 1000) * svc[7]
+    u         = get_user(msg.from_user.id)
     plat_name = data.get("plat_name", "")
 
-    await state.update_data(link=msg.text, amount=amount)
+    # Link so'rash xabarini o'chir
+    link_ask_id   = data.get("link_ask_msg_id")
+    link_ask_chat = data.get("link_ask_chat_id")
+    if link_ask_id and link_ask_chat:
+        asyncio.create_task(delete_msg_by_id(link_ask_chat, link_ask_id))
+
+    # Foydalanuvchi yuborgan link xabarini 10 sekundda o'chir
+    asyncio.create_task(auto_delete(msg, 10))
+
+    await state.update_data(link=link_text, amount=amount)
 
     if u[3] < amount:
-        await msg.answer(
+        err = await msg.answer(
             f"❌ Balansingiz yetarli emas!\n\n"
             f"💵 Balans: {u[3]:.2f} {cur()}\n"
             f"💰 Kerak: {amount:.2f} {cur()}\n"
@@ -809,6 +914,7 @@ async def enter_link(msg: types.Message, state: FSMContext):
             f"Hisob to'ldirish uchun asosiy menyudan foydalaning.",
             reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)
         )
+        asyncio.create_task(auto_delete(err, 15))
         await state.clear(); return
 
     b = InlineKeyboardBuilder()
@@ -816,38 +922,50 @@ async def enter_link(msg: types.Message, state: FSMContext):
     b.button(text="❌ Bekor qilish", callback_data="order_no")
     b.adjust(1)
 
-    await msg.answer(
+    confirm_msg = await msg.answer(
         f"📋 Buyurtma ma'lumotlari:\n\n"
         f"📌 Xizmat: {plat_name} - {svc[4]}\n"
-        f"🔗 Link: {msg.text}\n"
+        f"🔗 Link: {link_text}\n"
         f"📊 Miqdor: {qty} ta\n"
         f"💰 To'lash: {amount:.2f} {cur()}\n"
         f"💵 Balans: {u[3]:.2f} {cur()}\n\n"
         f"Tasdiqlaysizmi?",
         reply_markup=b.as_markup()
     )
+    await state.update_data(confirm_msg_id=confirm_msg.message_id,
+                            confirm_chat_id=confirm_msg.chat.id)
 
 # ─── Tasdiqlash → API yuborish ──────────────────────────────
 @dp.callback_query(F.data == "order_yes")
 async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
-    data   = await state.get_data()
-    svc    = data["svc"]
-    link   = data["link"]
-    qty    = data["qty"]
-    amount = data["amount"]
-    uid    = cb.from_user.id
+    data      = await state.get_data()
+    svc       = data["svc"]
+    link      = data["link"]
+    qty       = data["qty"]
+    amount    = data["amount"]
+    uid       = cb.from_user.id
     plat_name = data.get("plat_name", "")
+
+    # Tasdiqlash xabarini o'chir
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
 
     conn = db(); c = conn.cursor()
     c.execute("UPDATE users SET balance=balance-? WHERE user_id=?", (amount, uid))
 
     api_order_id = None
     api_error    = None
+    api_url_val  = None
+    api_key_val  = None
     if svc[2]:
         c.execute("SELECT url,api_key FROM apis WHERE id=?", (svc[2],))
-        api = c.fetchone()
-        if api:
-            res = await api_order(api[0], api[1], svc[3], link, qty)
+        api_row = c.fetchone()
+        if api_row:
+            api_url_val = api_row[0]
+            api_key_val = api_row[1]
+            res = await api_order(api_url_val, api_key_val, svc[3], link, qty)
             if res and "order" in res:
                 api_order_id = str(res["order"])
             elif res and "error" in res:
@@ -865,40 +983,53 @@ async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
     )
     conn.commit(); conn.close()
 
-    u = get_user(uid)
+    u           = get_user(uid)
     new_balance = u[3] if u else 0
 
-    lines = [
-        "✅ Buyurtma muvaffaqiyatli yuborildi!\n",
-        f"🆔 Buyurtma: #{order_id}",
-        f"📌 Xizmat: {plat_name} - {svc[4]}",
-        f"🔗 Link: {link}",
-        f"📊 Miqdor: {qty} ta",
-        f"💰 Yechildi: {amount:.2f} {cur()}",
-        f"💵 Qolgan balans: {new_balance:.2f} {cur()}",
-    ]
+    # "Sizning buyurtmangiz" xabari
+    order_text = (
+        f"✅ Sizning buyurtmangiz qabul qilindi!\n\n"
+        f"🆔 Buyurtma raqami: <b>#{order_id}</b>\n"
+        f"📌 Xizmat: {plat_name} - {svc[4]}\n"
+        f"🔗 Link: {link}\n"
+        f"📊 Miqdor: {qty} ta\n"
+        f"💰 To'landi: {amount:.2f} {cur()}\n"
+        f"💵 Qolgan balans: {new_balance:.2f} {cur()}\n"
+    )
     if api_order_id:
-        lines.append(f"📡 API order ID: {api_order_id}")
+        order_text += f"📡 API ID: {api_order_id}\n"
     if api_error:
-        lines.append(f"⚠️ API xato: {api_error}")
-    lines.append("\n⏳ Xizmat bajarilmoqda...")
+        order_text += f"⚠️ API xato: {api_error}\n"
+    order_text += "\n⏳ Xizmat bajarilmoqda..."
 
     await state.clear()
-    try:
-        await cb.message.edit_text("\n".join(lines), reply_markup=None)
-    except Exception:
-        await cb.message.answer("\n".join(lines))
-    await cb.message.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(uid in ADMIN_IDS))
+
+    # Buyurtma xabarini yuborish
+    order_msg = await cb.message.answer(order_text, parse_mode="HTML",
+                                         reply_markup=main_kb(uid in ADMIN_IDS))
+    # Buyurtma xabarini 10 sekundda o'chir
+    asyncio.create_task(auto_delete(order_msg, 10))
+
+    # Agar API order ID bo'lsa — fonda holatni kuzat
+    if api_order_id and api_url_val and api_key_val:
+        asyncio.create_task(
+            check_order_status_loop(uid, order_id, api_order_id, api_url_val, api_key_val)
+        )
+
     await cb.answer()
 
 @dp.callback_query(F.data == "order_no")
 async def order_cancel(cb: types.CallbackQuery, state: FSMContext):
     await state.clear()
     try:
-        await cb.message.edit_text("❌ Buyurtma bekor qilindi.", reply_markup=None)
+        await cb.message.delete()
     except Exception:
         pass
-    await cb.message.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(cb.from_user.id in ADMIN_IDS))
+    cancel_msg = await cb.message.answer(
+        "❌ Buyurtma bekor qilindi.",
+        reply_markup=main_kb(cb.from_user.id in ADMIN_IDS)
+    )
+    asyncio.create_task(auto_delete(cancel_msg, 10))
     await cb.answer()
 
 # ═══════════════════════════════════════════════════════════
