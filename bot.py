@@ -734,7 +734,7 @@ async def order_back_main(cb: types.CallbackQuery, state: FSMContext):
     await cb.message.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(cb.from_user.id in ADMIN_IDS))
     await cb.answer()
 
-@dp.callback_query(F.data.startswith("plat_"))
+@dp.callback_query(F.data.startswith("plat_") & ~F.data.startswith("plat_ren_") & ~F.data.startswith("plat_del_") & ~F.data.startswith("plat_add"))
 async def platform_selected(cb: types.CallbackQuery, state: FSMContext):
     platform = cb.data.replace("plat_", "")
     plat_name = get_platforms().get(platform, platform.capitalize())
@@ -1856,7 +1856,7 @@ async def plat_ren_save(msg: types.Message, state: FSMContext):
         await msg.answer(f"✅ Platforma nomi o'zgartirildi: {new_name}", reply_markup=admin_kb())
 
 # ── Platforma o'chirish ───────────────────────────────────
-@dp.callback_query(F.data.startswith("plat_del_"))
+@dp.callback_query(F.data.startswith("plat_del_") & ~F.data.startswith("plat_del_confirm_") & ~F.data.startswith("plat_del_cancel"))
 async def plat_del(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
     pid = cb.data.replace("plat_del_", "")
