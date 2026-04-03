@@ -623,9 +623,13 @@ async def topup(msg: types.Message):
 async def pay_noop(cb: types.CallbackQuery):
     await cb.answer()
 
-@dp.callback_query(F.data.startswith("pay_manual_"))
+@dp.callback_query(F.data.startswith("pay_manual_") & ~F.data.startswith("pay_manual_settings"))
 async def pay_manual_show(cb: types.CallbackQuery):
-    pid = int(cb.data.replace("pay_manual_", ""))
+    pid_str = cb.data.replace("pay_manual_", "")
+    try:
+        pid = int(pid_str)
+    except ValueError:
+        await cb.answer(); return
     conn = db(); c = conn.cursor()
     c.execute("SELECT pay_type, name, card_number, card_expiry, card_holder FROM manual_payments WHERE id=?", (pid,))
     pay = c.fetchone(); conn.close()
@@ -1455,12 +1459,12 @@ async def payment_methods(msg: types.Message):
     if msg.from_user.id not in ADMIN_IDS: return
     b = InlineKeyboardBuilder()
     b.button(text="⚡ Avtomatik to'lov tizimlari", callback_data="pay_auto_settings")
-    b.button(text="📝 Oddiy to'lov tizimlari",     callback_data="pay_manual_settings")
+    b.button(text="📝 Oddiy to'lov tizimlari",     callback_data="mpay_settings")
     b.adjust(1)
     await msg.answer("⚙️ To'lov tizim sozlamalarisiz:", reply_markup=b.as_markup())
 
 # ── Oddiy to'lov sozlamalari ───────────────────────────────
-@dp.callback_query(F.data == "pay_manual_settings")
+@dp.callback_query(F.data == "mpay_settings")
 async def pay_manual_settings(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
     conn = db(); c = conn.cursor()
