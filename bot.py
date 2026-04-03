@@ -524,6 +524,7 @@ class AS(StatesGroup):
     plat_rename_val    = State()
     topup_reply_uid    = State()
     topup_reply_msg    = State()
+    svc_percent_input  = State()
 
 # ─────────────────────────────────────────────────────────────
 #  KEYBOARDS
@@ -2455,9 +2456,8 @@ async def svc_home(msg: types.Message):
     c.execute("SELECT COUNT(*) FROM services");   ns = c.fetchone()[0]
     conn.close()
     kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="📂 Bo'limlar")],
-        [KeyboardButton(text="🛠 Barcha xizmatlar")],
-        [KeyboardButton(text="🌐 Platformalar")],
+        [KeyboardButton(text="📂 Bo'limlar"),      KeyboardButton(text="🛠 Barcha xizmatlar")],
+        [KeyboardButton(text="📊 Foiz qo'shish"),  KeyboardButton(text="🌐 Platformalar")],
         [KeyboardButton(text="◀️ Orqaga")],
     ], resize_keyboard=True)
     await msg.answer(
@@ -2466,6 +2466,75 @@ async def svc_home(msg: types.Message):
         f"🛠 Xizmatlar: {ns} ta",
         reply_markup=kb
     )
+
+@dp.message(F.text == "📊 Foiz qo'shish")
+async def svc_percent_start(msg: types.Message, state: FSMContext):
+    if msg.from_user.id not in ADMIN_IDS: return
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM services WHERE is_active=1")
+    ns = c.fetchone()[0]; conn.close()
+    b = InlineKeyboardBuilder()
+    for p in ["5", "10", "15", "20", "25", "30", "50"]:
+        b.button(text=f"+{p}%", callback_data=f"svcp_{p}")
+    b.adjust(4)
+    await state.set_state(AS.svc_percent_input)
+    await msg.answer(
+        f"📊 Barcha xizmatlar narxiga foiz qo'shish\n\n"
+        f"🛠 Faol xizmatlar: {ns} ta\n\n"
+        f"Quyidagi foizlardan birini tanlang yoki o'z raqamingizni kiriting\n"
+        f"(Masalan: 10 yoki 10.5):",
+        reply_markup=b.as_markup()
+    )
+
+@dp.callback_query(F.data.startswith("svcp_"))
+async def svc_percent_quick(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    percent_str = cb.data.replace("svcp_", "")
+    await _apply_percent(cb.message, state, percent_str, cb)
+
+@dp.message(AS.svc_percent_input)
+async def svc_percent_input_h(msg: types.Message, state: FSMContext):
+    if msg.text in ("❌ Bekor qilish", "◀️ Orqaga"):
+        await state.clear()
+        await msg.answer("Bekor qilindi", reply_markup=admin_kb())
+        return
+    await _apply_percent(msg, state, msg.text.strip(), None)
+
+async def _apply_percent(target, state: FSMContext, percent_str: str, cb=None):
+    try:
+        percent = float(percent_str.replace(",", ".").replace("%", ""))
+        if percent <= 0 or percent > 1000:
+            raise ValueError
+    except (ValueError, TypeError):
+        err_text = "❌ Noto'g'ri foiz! Musbat son kiriting (masalan: 10 yoki 10.5)"
+        if cb:
+            await cb.answer(err_text, show_alert=True)
+        else:
+            await target.answer(err_text)
+        return
+
+    koeff = 1 + percent / 100
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM services"); total = c.fetchone()[0]
+    c.execute("UPDATE services SET price_per1000 = ROUND(price_per1000 * ?, 2)", (koeff,))
+    conn.commit(); conn.close()
+
+    await state.clear()
+    asyncio.create_task(jsonbin_save())
+
+    text = (
+        f"✅ Barcha xizmatlar narxi +{percent}% ko'tarildi!\n\n"
+        f"🛠 Yangilangan xizmatlar: {total} ta\n"
+        f"📈 Koeffitsient: x{koeff:.4f}"
+    )
+    if cb:
+        try:
+            await cb.message.edit_text(text, reply_markup=None)
+        except Exception:
+            await cb.message.answer(text)
+        await cb.answer("✅ Narxlar yangilandi!")
+    else:
+        await target.answer(text, reply_markup=admin_kb())
 
 @dp.message(F.text == "📂 Bo'limlar")
 async def cat_menu(msg: types.Message):
