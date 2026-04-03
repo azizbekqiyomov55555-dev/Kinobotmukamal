@@ -2598,7 +2598,7 @@ async def do_add_cat(msg: types.Message, state: FSMContext):
     await msg.answer(f"✅ Bo'lim qo'shildi: {msg.text}", reply_markup=admin_kb())
     asyncio.create_task(jsonbin_save())
 
-@dp.callback_query(F.data.startswith("cat_") & ~F.data.startswith("cat_add") & ~F.data.startswith("cat_plat_") & ~F.data.startswith("cat_svc") & ~F.data.startswith("cat_svcs_"))
+@dp.callback_query(F.data.startswith("cat_") & ~F.data.startswith("cat_add") & ~F.data.startswith("cat_plat_") & ~F.data.startswith("cat_svc") & ~F.data.startswith("cat_svcs_") & ~F.data.startswith("cat_del_") & ~F.data.startswith("cat_tog_"))
 async def cat_detail(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
     try:
