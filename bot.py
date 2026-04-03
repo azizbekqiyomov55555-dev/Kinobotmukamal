@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 #  ⚙️  SOZLAMALAR
 # ============================================================
-BOT_TOKEN = "8703736182:AAGPaomeVk4ZE1fLGpRSX6W4P9d2acDVjHU"
+BOT_TOKEN = "8654177794:AAF9RkeQxZI0bNbRIYQaJykUHp2ZeBhCpNg"
 ADMIN_IDS = [8537782289]
 
 def get_platforms():
