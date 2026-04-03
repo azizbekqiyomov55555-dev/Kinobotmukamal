@@ -390,6 +390,7 @@ def admin_kb():
         [KeyboardButton(text="👩‍💻 Foydalanuvchini boshqarish")],
         [KeyboardButton(text="📚 Qo'llanmalar"),       KeyboardButton(text="📈 Buyurtmalar")],
         [KeyboardButton(text="📁 Xizmatlar")],
+        [KeyboardButton(text="⚙️ Asosiy sozlamalar")],
         [KeyboardButton(text="◀️ Orqaga")],
     ], resize_keyboard=True)
 
@@ -2124,6 +2125,125 @@ async def plat_del_cancel(cb: types.CallbackQuery):
     except Exception:
         pass
     await cb.answer()
+
+# ═══════════════════════════════════════════════════════════
+#  ADMIN — Asosiy sozlamalar
+# ═══════════════════════════════════════════════════════════
+@dp.message(F.text == "⚙️ Asosiy sozlamalar")
+async def main_settings(msg: types.Message):
+    if msg.from_user.id not in ADMIN_IDS: return
+    ref_bonus     = get_setting("referral_bonus", "2500")
+    currency      = get_setting("currency", "Sum")
+    svc_time      = get_setting("service_time", "1")
+    prem_emoji    = get_setting("premium_emoji", "1")
+
+    b = InlineKeyboardBuilder()
+    b.button(text=f"💰 Referal bonus: {ref_bonus}",         callback_data="set_ref_bonus")
+    b.button(text=f"💱 Valyuta: {currency}",                callback_data="set_currency")
+    b.button(text=f"⏱ Xizmat vaqti (kun): {svc_time}",     callback_data="set_svc_time")
+    b.button(text=f"{'✅' if prem_emoji=='1' else '❌'} Premium emoji", callback_data="tog_prem_emoji")
+    b.adjust(1)
+
+    await msg.answer(
+        f"⚙️ Asosiy sozlamalar:\n\n"
+        f"💰 Referal bonus: {ref_bonus} {currency}\n"
+        f"💱 Valyuta: {currency}\n"
+        f"⏱ Xizmat vaqti: {svc_time} kun\n"
+        f"⭐ Premium emoji: {'Faol' if prem_emoji=='1' else 'Nofaol'}",
+        reply_markup=b.as_markup()
+    )
+
+@dp.callback_query(F.data == "set_ref_bonus")
+async def set_ref_bonus_start(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await state.set_state(AS.set_referral)
+    await cb.message.answer(
+        f"💰 Yangi referal bonus miqdorini kiriting:\n"
+        f"Hozirgi: {get_setting('referral_bonus', '2500')} {cur()}",
+        reply_markup=cancel_kb()
+    )
+    await cb.answer()
+
+@dp.message(AS.set_referral)
+async def do_set_referral(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    try:
+        val = float(msg.text)
+        if val < 0: raise ValueError
+    except:
+        await msg.answer("❌ Noto'g'ri miqdor, faqat musbat son kiriting"); return
+    set_setting("referral_bonus", str(val))
+    await state.clear()
+    await msg.answer(f"✅ Referal bonus o'zgartirildi: {val} {cur()}", reply_markup=admin_kb())
+
+@dp.callback_query(F.data == "set_currency")
+async def set_currency_start(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await state.set_state(AS.set_currency)
+    await cb.message.answer(
+        f"💱 Yangi valyuta nomini kiriting:\n"
+        f"Hozirgi: {cur()}\n\n"
+        f"Masalan: Sum, UZS, USD, EUR",
+        reply_markup=cancel_kb()
+    )
+    await cb.answer()
+
+@dp.message(AS.set_currency)
+async def do_set_currency(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    set_setting("currency", msg.text.strip())
+    await state.clear()
+    await msg.answer(f"✅ Valyuta o'zgartirildi: {msg.text.strip()}", reply_markup=admin_kb())
+
+@dp.callback_query(F.data == "set_svc_time")
+async def set_svc_time_cb(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    cur_val = get_setting("service_time", "1")
+    b = InlineKeyboardBuilder()
+    for d in ["1", "3", "7", "14", "30"]:
+        b.button(text=f"{'✅ ' if cur_val==d else ''}{d} kun", callback_data=f"svc_time_{d}")
+    b.adjust(3)
+    await cb.message.answer(
+        f"⏱ Xizmat bajarilish vaqtini tanlang:\nHozirgi: {cur_val} kun",
+        reply_markup=b.as_markup()
+    )
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("svc_time_"))
+async def do_svc_time(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    val = cb.data.replace("svc_time_", "")
+    set_setting("service_time", val)
+    try:
+        await cb.message.edit_text(f"✅ Xizmat vaqti o'zgartirildi: {val} kun", reply_markup=None)
+    except Exception:
+        await cb.message.answer(f"✅ Xizmat vaqti o'zgartirildi: {val} kun", reply_markup=admin_kb())
+    await cb.answer("✅ Saqlandi!")
+
+@dp.callback_query(F.data == "tog_prem_emoji")
+async def tog_prem_emoji(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    cur_val = get_setting("premium_emoji", "1")
+    new_val = "0" if cur_val == "1" else "1"
+    set_setting("premium_emoji", new_val)
+    status = "Faol ✅" if new_val == "1" else "Nofaol ❌"
+    await cb.answer(f"Premium emoji: {status}", show_alert=True)
+    # Sozlamalar menyusini yangilash
+    ref_bonus  = get_setting("referral_bonus", "2500")
+    currency   = get_setting("currency", "Sum")
+    svc_time   = get_setting("service_time", "1")
+    b = InlineKeyboardBuilder()
+    b.button(text=f"💰 Referal bonus: {ref_bonus}",         callback_data="set_ref_bonus")
+    b.button(text=f"💱 Valyuta: {currency}",                callback_data="set_currency")
+    b.button(text=f"⏱ Xizmat vaqti (kun): {svc_time}",     callback_data="set_svc_time")
+    b.button(text=f"{'✅' if new_val=='1' else '❌'} Premium emoji", callback_data="tog_prem_emoji")
+    b.adjust(1)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=b.as_markup())
+    except Exception:
+        pass
 
 # ── Buyurtmalar (Admin) ──────────────────────────────────
 @dp.message(F.text == "📈 Buyurtmalar")
