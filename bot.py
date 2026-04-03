@@ -37,13 +37,25 @@ BOT_TOKEN = "8648355597:AAF_eM_GHY3SmBpHB4VSuK93O-o_pUXdgFg"
 ADMIN_IDS = [8537782289]
 
 def get_platforms():
-    """Platformalar nomlarini settings dan oladi"""
-    return {
-        "telegram":  get_setting("plat_telegram",  "✈️ Telegram"),
-        "instagram": get_setting("plat_instagram", "📸 Instagram"),
-        "youtube":   get_setting("plat_youtube",   "▶️ Youtube"),
-        "tiktok":    get_setting("plat_tiktok",    "🎵 Tik tok"),
-    }
+    """Platformalar ro'yhatini DB dan oladi"""
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT key, name FROM platforms ORDER BY sort_order, id")
+    rows = c.fetchall(); conn.close()
+    if not rows:
+        return {
+            "telegram":  "✈️ Telegram",
+            "instagram": "📸 Instagram",
+            "youtube":   "▶️ Youtube",
+            "tiktok":    "🎵 Tik tok",
+        }
+    return {row[0]: row[1] for row in rows}
+
+def get_platforms_list():
+    """Platformalar ro'yhatini (id, key, name) DB dan oladi"""
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT id, key, name FROM platforms ORDER BY sort_order, id")
+    rows = c.fetchall(); conn.close()
+    return rows
 
 # Eski PLATFORMS o'rniga get_platforms() ishlatiladi
 
@@ -156,6 +168,23 @@ def init_db():
         title   TEXT,
         content TEXT
     )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS platforms (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        key       TEXT NOT NULL UNIQUE,
+        name      TEXT NOT NULL,
+        sort_order INTEGER DEFAULT 0
+    )""")
+
+    # Default platformalar (faqat bo'sh bo'lsa qo'shiladi)
+    default_plats = [
+        ("telegram",  "✈️ Telegram",  1),
+        ("instagram", "📸 Instagram", 2),
+        ("youtube",   "▶️ Youtube",   3),
+        ("tiktok",    "🎵 Tik tok",   4),
+    ]
+    for pk, pn, po in default_plats:
+        c.execute("INSERT OR IGNORE INTO platforms(key,name,sort_order) VALUES(?,?,?)", (pk, pn, po))
 
     defaults = [
         ("referral_bonus",   "2500"),
@@ -340,7 +369,7 @@ def admin_kb():
         [KeyboardButton(text="💳 To'lov tizimlar"),   KeyboardButton(text="🔑 API")],
         [KeyboardButton(text="👩‍💻 Foydalanuvchini boshqarish")],
         [KeyboardButton(text="📚 Qo'llanmalar"),       KeyboardButton(text="📈 Buyurtmalar")],
-        [KeyboardButton(text="📁 Xizmatlar"),          KeyboardButton(text="🌐 Platformalar")],
+        [KeyboardButton(text="📁 Xizmatlar")],
         [KeyboardButton(text="◀️ Orqaga")],
     ], resize_keyboard=True)
 
@@ -351,15 +380,16 @@ def cancel_kb():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Bekor qilish")]], resize_keyboard=True)
 
 def platforms_inline_kb():
-    p = get_platforms()
-    b = InlineKeyboardBuilder()
-    b.button(text=p["telegram"],  callback_data="plat_telegram")
-    b.button(text=p["instagram"], callback_data="plat_instagram")
-    b.button(text=p["youtube"],   callback_data="plat_youtube")
-    b.button(text=p["tiktok"],    callback_data="plat_tiktok")
-    b.button(text="◀️ Orqaga",    callback_data="order_back_main")
-    b.adjust(2, 2, 1)
-    return b.as_markup()
+    plats = get_platforms_list()
+    rows = []
+    for i in range(0, len(plats), 2):
+        row = []
+        row.append(InlineKeyboardButton(text=plats[i][2], callback_data=f"plat_{plats[i][1]}"))
+        if i+1 < len(plats):
+            row.append(InlineKeyboardButton(text=plats[i+1][2], callback_data=f"plat_{plats[i+1][1]}"))
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="◀️ Orqaga", callback_data="order_back_main")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 # ─────────────────────────────────────────────────────────────
 #  API HELPERS
@@ -1725,34 +1755,71 @@ async def del_guide(cb: types.CallbackQuery):
     await cb.message.answer("✅ Qo'llanma o'chirildi!"); await cb.answer()
 
 # ═══════════════════════════════════════════════════════════
-#  ADMIN — Platformalar nomini o'zgartirish
+#  ADMIN — Platformalar (qo'shish, o'chirish, nomini o'zgartirish)
 # ═══════════════════════════════════════════════════════════
+async def show_platforms_menu(target, edit=False):
+    """Platformalar ro'yhatini ko'rsatadi"""
+    plats = get_platforms_list()
+    b = InlineKeyboardBuilder()
+    for pid, pkey, pname in plats:
+        b.button(text=f"✏️ {pname}", callback_data=f"plat_ren_{pid}")
+        b.button(text="🗑",           callback_data=f"plat_del_{pid}")
+    b.button(text="➕ Platforma qo'shish", callback_data="plat_add")
+    b.adjust(2)
+    # Adjust: har satr 2 tugma (nom + o'chirish), oxirgi 1 tugma
+    # Manualroq usul:
+    b2 = InlineKeyboardBuilder()
+    rows = []
+    for pid, pkey, pname in plats:
+        rows.append([
+            InlineKeyboardButton(text=f"✏️ {pname}", callback_data=f"plat_ren_{pid}"),
+            InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"plat_del_{pid}"),
+        ])
+    rows.append([InlineKeyboardButton(text="➕ Platforma qo'shish", callback_data="plat_add")])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+
+    text = f"🌐 Platformalar: {len(plats)} ta\n\nNomini o'zgartirish yoki o'chirish:"
+    if edit:
+        try:
+            await target.edit_text(text, reply_markup=kb); return
+        except Exception:
+            pass
+    await target.answer(text, reply_markup=kb)
+
 @dp.message(F.text == "🌐 Platformalar")
 async def admin_platforms(msg: types.Message):
     if msg.from_user.id not in ADMIN_IDS: return
-    p = get_platforms()
-    b = InlineKeyboardBuilder()
-    b.button(text=f"✏️ {p['telegram']}",  callback_data="plat_ren_telegram")
-    b.button(text=f"✏️ {p['instagram']}", callback_data="plat_ren_instagram")
-    b.button(text=f"✏️ {p['youtube']}",   callback_data="plat_ren_youtube")
-    b.button(text=f"✏️ {p['tiktok']}",    callback_data="plat_ren_tiktok")
-    b.adjust(2)
-    await msg.answer(
-        "🌐 Platforma tugmalarini o'zgartirish:\n\n"
-        "Emoji + nom kiriting, masalan: 📱 Telegram",
-        reply_markup=b.as_markup()
-    )
+    await show_platforms_menu(msg)
 
+# ── Platforma qo'shish ────────────────────────────────────
+@dp.callback_query(F.data == "plat_add")
+async def plat_add_start(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await state.set_state(AS.plat_rename_val)
+    await state.update_data(plat_rename_key="__new__")
+    await cb.message.answer(
+        "➕ Yangi platforma nomini kiriting:\n\n"
+        "Masalan: 📱 WhatsApp\n"
+        "(Emoji + bo'sh joy + nom)\n\n"
+        "Ichki kalit (key) avtomatik yaratiladi.",
+        reply_markup=cancel_kb()
+    )
+    await cb.answer()
+
+# ── Platforma nomini o'zgartirish ─────────────────────────
 @dp.callback_query(F.data.startswith("plat_ren_"))
 async def plat_ren_start(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
-    key = cb.data.replace("plat_ren_", "")
-    p   = get_platforms()
-    await state.update_data(plat_rename_key=f"plat_{key}")
+    pid = cb.data.replace("plat_ren_", "")
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT key, name FROM platforms WHERE id=?", (pid,))
+    row = c.fetchone(); conn.close()
+    if not row: await cb.answer("❌ Topilmadi"); return
+    await state.update_data(plat_rename_key=pid)
     await state.set_state(AS.plat_rename_val)
     await cb.message.answer(
         f"✏️ Yangi nom kiriting:\n\n"
-        f"Hozirgi: {p.get(key, key)}\n\n"
+        f"Hozirgi: {row[1]}\n\n"
         f"Masalan: 📱 Telegram\n"
         f"(Emoji + bo'sh joy + nom)",
         reply_markup=cancel_kb()
@@ -1764,10 +1831,79 @@ async def plat_ren_save(msg: types.Message, state: FSMContext):
     if msg.text == "❌ Bekor qilish":
         await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
     data = await state.get_data()
-    key  = data.get("plat_rename_key", "")
-    set_setting(key, msg.text.strip())
-    await state.clear()
-    await msg.answer(f"✅ Platforma nomi o'zgartirildi: {msg.text.strip()}", reply_markup=admin_kb())
+    pid  = data.get("plat_rename_key", "")
+    new_name = msg.text.strip()
+    conn = db(); c = conn.cursor()
+    if pid == "__new__":
+        # Yangi platforma qo'shish — key nomdan yaratiladi
+        import re, time
+        key = re.sub(r'[^a-z0-9]', '', new_name.lower().replace(' ', '_'))[:20]
+        if not key:
+            key = f"plat_{int(time.time())}"
+        # key takrorlanmasin
+        c.execute("SELECT id FROM platforms WHERE key=?", (key,))
+        if c.fetchone():
+            key = f"{key}_{int(time.time()) % 1000}"
+        c.execute("INSERT INTO platforms(key,name,sort_order) VALUES(?,?,?)",
+                  (key, new_name, 99))
+        conn.commit(); conn.close()
+        await state.clear()
+        await msg.answer(f"✅ Platforma qo'shildi: {new_name}", reply_markup=admin_kb())
+    else:
+        c.execute("UPDATE platforms SET name=? WHERE id=?", (new_name, pid))
+        conn.commit(); conn.close()
+        await state.clear()
+        await msg.answer(f"✅ Platforma nomi o'zgartirildi: {new_name}", reply_markup=admin_kb())
+
+# ── Platforma o'chirish ───────────────────────────────────
+@dp.callback_query(F.data.startswith("plat_del_"))
+async def plat_del(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    pid = cb.data.replace("plat_del_", "")
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT key, name FROM platforms WHERE id=?", (pid,))
+    row = c.fetchone()
+    if not row:
+        conn.close(); await cb.answer("❌ Topilmadi"); return
+    pkey, pname = row
+    # O'chirishni tasdiqlash
+    b = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Ha, o'chirish", callback_data=f"plat_del_confirm_{pid}"),
+        InlineKeyboardButton(text="❌ Yo'q",          callback_data="plat_del_cancel"),
+    ]])
+    conn.close()
+    await cb.message.answer(
+        f"⚠️ '{pname}' platformasini o'chirasizmi?\n\n"
+        f"Bu platformadagi barcha bo'limlar ham o'chib ketishi mumkin!",
+        reply_markup=b
+    )
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("plat_del_confirm_"))
+async def plat_del_confirm(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    pid = cb.data.replace("plat_del_confirm_", "")
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT key, name FROM platforms WHERE id=?", (pid,))
+    row = c.fetchone()
+    if not row:
+        conn.close(); await cb.answer("❌ Topilmadi"); return
+    pkey, pname = row
+    c.execute("DELETE FROM platforms WHERE id=?", (pid,))
+    conn.commit(); conn.close()
+    try:
+        await cb.message.edit_text(f"✅ '{pname}' platformasi o'chirildi!", reply_markup=None)
+    except Exception:
+        await cb.message.answer(f"✅ '{pname}' platformasi o'chirildi!")
+    await cb.answer()
+
+@dp.callback_query(F.data == "plat_del_cancel")
+async def plat_del_cancel(cb: types.CallbackQuery):
+    try:
+        await cb.message.edit_text("Bekor qilindi.", reply_markup=None)
+    except Exception:
+        pass
+    await cb.answer()
 
 # ── Buyurtmalar (Admin) ──────────────────────────────────
 @dp.message(F.text == "📈 Buyurtmalar")
@@ -1819,6 +1955,7 @@ async def svc_home(msg: types.Message):
     kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="📂 Bo'limlar")],
         [KeyboardButton(text="🛠 Barcha xizmatlar")],
+        [KeyboardButton(text="🌐 Platformalar")],
         [KeyboardButton(text="◀️ Orqaga")],
     ], resize_keyboard=True)
     await msg.answer(
@@ -1837,7 +1974,7 @@ async def cat_menu(msg: types.Message):
     b = InlineKeyboardBuilder()
     for cid, cname, cplat, cact in cats:
         status    = "✅" if cact else "❌"
-        plat_icon = {"telegram": "✈️", "instagram": "📸", "youtube": "▶️", "tiktok": "🎵"}.get(cplat, "📁")
+        plat_icon = get_platforms().get(cplat, cplat)
         b.button(text=f"{status} {plat_icon} {cname}", callback_data=f"cat_{cid}")
     b.button(text="➕ Bo'lim qo'shish", callback_data="cat_add")
     b.adjust(1)
@@ -1846,17 +1983,19 @@ async def cat_menu(msg: types.Message):
 @dp.callback_query(F.data == "cat_add")
 async def cat_add(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
-    p = get_platforms()
-    b = InlineKeyboardBuilder()
-    b.button(text=p["telegram"],  callback_data="cat_plat_telegram")
-    b.button(text=p["instagram"], callback_data="cat_plat_instagram")
-    b.button(text=p["youtube"],   callback_data="cat_plat_youtube")
-    b.button(text=p["tiktok"],    callback_data="cat_plat_tiktok")
-    b.adjust(2)
+    plats = get_platforms_list()
+    rows = []
+    for i in range(0, len(plats), 2):
+        row = []
+        row.append(InlineKeyboardButton(text=plats[i][2], callback_data=f"cat_plat_{plats[i][1]}"))
+        if i+1 < len(plats):
+            row.append(InlineKeyboardButton(text=plats[i+1][2], callback_data=f"cat_plat_{plats[i+1][1]}"))
+        rows.append(row)
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
     try:
-        await cb.message.edit_text("📁 Qaysi platforma uchun bo'lim qo'shmoqchisiz?", reply_markup=b.as_markup())
+        await cb.message.edit_text("📁 Qaysi platforma uchun bo'lim qo'shmoqchisiz?", reply_markup=kb)
     except Exception:
-        await cb.message.answer("📁 Qaysi platforma uchun bo'lim qo'shmoqchisiz?", reply_markup=b.as_markup())
+        await cb.message.answer("📁 Qaysi platforma uchun bo'lim qo'shmoqchisiz?", reply_markup=kb)
     await cb.answer()
 
 @dp.callback_query(F.data.startswith("cat_plat_"))
@@ -1902,7 +2041,7 @@ async def cat_detail(cb: types.CallbackQuery):
     conn.close()
     if not cat: await cb.answer("❌ Topilmadi"); return
     status    = "✅ Faol" if cat[3] else "❌ Nofaol"
-    plat_icon = {"telegram": "✈️", "instagram": "📸", "youtube": "▶️", "tiktok": "🎵"}.get(cat[2], "📁")
+    plat_icon = get_platforms().get(cat[2], cat[2])
     b = InlineKeyboardBuilder()
     b.button(text="❌ O'chirish" if cat[3] else "✅ Faollashtirish", callback_data=f"cat_tog_{cid}")
     b.button(text="➕ Xizmat qo'shish",  callback_data=f"cat_svc_add_{cid}")
@@ -2152,7 +2291,7 @@ async def all_svcs(msg: types.Message):
     b = InlineKeyboardBuilder()
     for sid, sname, sprice, sact, cname, cplat in svcs:
         st = "✅" if sact else "❌"
-        plat_icon = {"telegram": "✈️", "instagram": "📸", "youtube": "▶️", "tiktok": "🎵"}.get(cplat, "📁")
+        plat_icon = get_platforms().get(cplat, cplat)
         b.button(text=f"{st} {plat_icon} {sname} — {sprice:.2f} {cur()}", callback_data=f"admin_svc_{sid}")
     b.adjust(1)
     await msg.answer(f"📋 Barcha xizmatlar ({len(svcs)} ta):", reply_markup=b.as_markup())
