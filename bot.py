@@ -36,12 +36,16 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = "8648355597:AAF_eM_GHY3SmBpHB4VSuK93O-o_pUXdgFg"
 ADMIN_IDS = [8537782289]
 
-PLATFORMS = {
-    "telegram":  "✈️ Telegram",
-    "instagram": "📸 Instagram",
-    "youtube":   "▶️ Youtube",
-    "tiktok":    "🎵 Tik tok",
-}
+def get_platforms():
+    """Platformalar nomlarini settings dan oladi"""
+    return {
+        "telegram":  get_setting("plat_telegram",  "✈️ Telegram"),
+        "instagram": get_setting("plat_instagram", "📸 Instagram"),
+        "youtube":   get_setting("plat_youtube",   "▶️ Youtube"),
+        "tiktok":    get_setting("plat_tiktok",    "🎵 Tik tok"),
+    }
+
+# Eski PLATFORMS o'rniga get_platforms() ishlatiladi
 
 DB = "smm_bot.db"
 
@@ -154,12 +158,16 @@ def init_db():
     )""")
 
     defaults = [
-        ("referral_bonus", "2500"),
-        ("currency",       "Sum"),
-        ("service_time",   "1"),
-        ("premium_emoji",  "1"),
-        ("payme_active",   "0"),
-        ("click_active",   "0"),
+        ("referral_bonus",   "2500"),
+        ("currency",         "Sum"),
+        ("service_time",     "1"),
+        ("premium_emoji",    "1"),
+        ("payme_active",     "0"),
+        ("click_active",     "0"),
+        ("plat_telegram",    "✈️ Telegram"),
+        ("plat_instagram",   "📸 Instagram"),
+        ("plat_youtube",     "▶️ Youtube"),
+        ("plat_tiktok",      "🎵 Tik tok"),
     ]
     for k, v in defaults:
         c.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", (k, v))
@@ -308,6 +316,8 @@ class AS(StatesGroup):
     add_channel        = State()
     guide_title        = State()
     guide_content      = State()
+    plat_rename_key    = State()
+    plat_rename_val    = State()
 
 # ─────────────────────────────────────────────────────────────
 #  KEYBOARDS
@@ -330,7 +340,7 @@ def admin_kb():
         [KeyboardButton(text="💳 To'lov tizimlar"),   KeyboardButton(text="🔑 API")],
         [KeyboardButton(text="👩‍💻 Foydalanuvchini boshqarish")],
         [KeyboardButton(text="📚 Qo'llanmalar"),       KeyboardButton(text="📈 Buyurtmalar")],
-        [KeyboardButton(text="📁 Xizmatlar")],
+        [KeyboardButton(text="📁 Xizmatlar"),          KeyboardButton(text="🌐 Platformalar")],
         [KeyboardButton(text="◀️ Orqaga")],
     ], resize_keyboard=True)
 
@@ -341,11 +351,12 @@ def cancel_kb():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Bekor qilish")]], resize_keyboard=True)
 
 def platforms_inline_kb():
+    p = get_platforms()
     b = InlineKeyboardBuilder()
-    b.button(text="✈️ Telegram",  callback_data="plat_telegram")
-    b.button(text="📸 Instagram", callback_data="plat_instagram")
-    b.button(text="▶️ Youtube",   callback_data="plat_youtube")
-    b.button(text="🎵 Tik tok",   callback_data="plat_tiktok")
+    b.button(text=p["telegram"],  callback_data="plat_telegram")
+    b.button(text=p["instagram"], callback_data="plat_instagram")
+    b.button(text=p["youtube"],   callback_data="plat_youtube")
+    b.button(text=p["tiktok"],    callback_data="plat_tiktok")
     b.button(text="◀️ Orqaga",    callback_data="order_back_main")
     b.adjust(2, 2, 1)
     return b.as_markup()
@@ -696,7 +707,7 @@ async def order_back_main(cb: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data.startswith("plat_"))
 async def platform_selected(cb: types.CallbackQuery, state: FSMContext):
     platform = cb.data.replace("plat_", "")
-    plat_name = PLATFORMS.get(platform, platform.capitalize())
+    plat_name = get_platforms().get(platform, platform.capitalize())
 
     conn = db(); c = conn.cursor()
     c.execute("SELECT id, name FROM categories WHERE is_active=1 AND platform=?", (platform,))
@@ -762,7 +773,7 @@ async def order_cat_selected(cb: types.CallbackQuery, state: FSMContext):
 
     cat_name  = cat_row[0] if cat_row else "Bo'lim"
     platform  = cat_row[1] if cat_row else "telegram"
-    plat_name = PLATFORMS.get(platform, platform.capitalize())
+    plat_name = get_platforms().get(platform, platform.capitalize())
 
     b = InlineKeyboardBuilder()
     for sid, sname, price, mn, mx in svcs:
@@ -803,7 +814,7 @@ async def sel_svc(cb: types.CallbackQuery, state: FSMContext):
     svc       = row[:9]
     cat_name  = row[9] or ""
     platform  = row[10] or "telegram"
-    plat_name = PLATFORMS.get(platform, platform.capitalize())
+    plat_name = get_platforms().get(platform, platform.capitalize())
 
     await state.update_data(svc=svc, svc_cat_name=cat_name, platform=platform, plat_name=plat_name)
     await state.set_state(US.enter_quantity)
@@ -1713,6 +1724,51 @@ async def del_guide(cb: types.CallbackQuery):
     conn.commit(); conn.close()
     await cb.message.answer("✅ Qo'llanma o'chirildi!"); await cb.answer()
 
+# ═══════════════════════════════════════════════════════════
+#  ADMIN — Platformalar nomini o'zgartirish
+# ═══════════════════════════════════════════════════════════
+@dp.message(F.text == "🌐 Platformalar")
+async def admin_platforms(msg: types.Message):
+    if msg.from_user.id not in ADMIN_IDS: return
+    p = get_platforms()
+    b = InlineKeyboardBuilder()
+    b.button(text=f"✏️ {p['telegram']}",  callback_data="plat_ren_telegram")
+    b.button(text=f"✏️ {p['instagram']}", callback_data="plat_ren_instagram")
+    b.button(text=f"✏️ {p['youtube']}",   callback_data="plat_ren_youtube")
+    b.button(text=f"✏️ {p['tiktok']}",    callback_data="plat_ren_tiktok")
+    b.adjust(2)
+    await msg.answer(
+        "🌐 Platforma tugmalarini o'zgartirish:\n\n"
+        "Emoji + nom kiriting, masalan: 📱 Telegram",
+        reply_markup=b.as_markup()
+    )
+
+@dp.callback_query(F.data.startswith("plat_ren_"))
+async def plat_ren_start(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    key = cb.data.replace("plat_ren_", "")
+    p   = get_platforms()
+    await state.update_data(plat_rename_key=f"plat_{key}")
+    await state.set_state(AS.plat_rename_val)
+    await cb.message.answer(
+        f"✏️ Yangi nom kiriting:\n\n"
+        f"Hozirgi: {p.get(key, key)}\n\n"
+        f"Masalan: 📱 Telegram\n"
+        f"(Emoji + bo'sh joy + nom)",
+        reply_markup=cancel_kb()
+    )
+    await cb.answer()
+
+@dp.message(AS.plat_rename_val)
+async def plat_ren_save(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    data = await state.get_data()
+    key  = data.get("plat_rename_key", "")
+    set_setting(key, msg.text.strip())
+    await state.clear()
+    await msg.answer(f"✅ Platforma nomi o'zgartirildi: {msg.text.strip()}", reply_markup=admin_kb())
+
 # ── Buyurtmalar (Admin) ──────────────────────────────────
 @dp.message(F.text == "📈 Buyurtmalar")
 async def admin_orders(msg: types.Message):
@@ -1790,11 +1846,12 @@ async def cat_menu(msg: types.Message):
 @dp.callback_query(F.data == "cat_add")
 async def cat_add(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
+    p = get_platforms()
     b = InlineKeyboardBuilder()
-    b.button(text="✈️ Telegram",  callback_data="cat_plat_telegram")
-    b.button(text="📸 Instagram", callback_data="cat_plat_instagram")
-    b.button(text="▶️ Youtube",   callback_data="cat_plat_youtube")
-    b.button(text="🎵 Tik tok",   callback_data="cat_plat_tiktok")
+    b.button(text=p["telegram"],  callback_data="cat_plat_telegram")
+    b.button(text=p["instagram"], callback_data="cat_plat_instagram")
+    b.button(text=p["youtube"],   callback_data="cat_plat_youtube")
+    b.button(text=p["tiktok"],    callback_data="cat_plat_tiktok")
     b.adjust(2)
     try:
         await cb.message.edit_text("📁 Qaysi platforma uchun bo'lim qo'shmoqchisiz?", reply_markup=b.as_markup())
@@ -1805,8 +1862,7 @@ async def cat_add(cb: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data.startswith("cat_plat_"))
 async def cat_plat_select(cb: types.CallbackQuery, state: FSMContext):
     platform  = cb.data.replace("cat_plat_", "")
-    plat_name = {"telegram": "Telegram", "instagram": "Instagram",
-                 "youtube": "Youtube", "tiktok": "Tik tok"}.get(platform, platform)
+    plat_name = get_platforms().get(platform, platform.capitalize())
     await state.update_data(new_cat_platform=platform)
     await state.set_state(AS.add_category)
     try:
