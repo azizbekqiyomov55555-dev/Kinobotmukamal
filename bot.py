@@ -438,7 +438,7 @@ async def cmd_start(msg: types.Message, state: FSMContext):
         reg_user(uid, msg.from_user.username or "", msg.from_user.full_name or "", ref)
 
     # /start buyrug'ini 10 sekundda o'chir (ammo asosiy menyu xabari o'chmaydi)
-    asyncio.create_task(auto_delete(msg, 10))
+    asyncio.create_task(auto_delete(msg, 40))
 
     if not await check_sub(uid):
         await msg.answer("⚠️ Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
@@ -480,7 +480,7 @@ async def my_account(msg: types.Message):
         reply_markup=b.as_markup()
     )
     # 10 soniyada o'chadi
-    asyncio.create_task(auto_delete(sent, 10))
+    asyncio.create_task(auto_delete(sent, 40))
 
 @dp.callback_query(F.data == "go_topup")
 async def go_topup_cb(cb: types.CallbackQuery):
@@ -503,7 +503,7 @@ async def earn(msg: types.Message):
         f"👥 Referallaringiz: {u[5]} ta",
         reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)
     )
-    asyncio.create_task(auto_delete(sent, 10))
+    asyncio.create_task(auto_delete(sent, 40))
 
 # ═══════════════════════════════════════════════════════════
 #  USER — Hisob to'ldirish
@@ -553,14 +553,14 @@ async def show_topup(message: types.Message, uid: int):
     if not kb.inline_keyboard:
         sent = await message.answer("❌ Hozirda to'lov tizimlari faol emas.",
                                     reply_markup=main_kb(uid in ADMIN_IDS))
-        asyncio.create_task(auto_delete(sent, 10))
+        asyncio.create_task(auto_delete(sent, 40))
         return
     sent = await message.answer("💳 Quyidagilardan birini tanlang:", reply_markup=kb)
-    asyncio.create_task(auto_delete(sent, 10))
+    asyncio.create_task(auto_delete(sent, 40))
 
 @dp.message(F.text.in_(["Hisob to'ldirish", "Hisobni to'ldirish"]))
 async def topup(msg: types.Message):
-    asyncio.create_task(auto_delete(msg, 10))
+    asyncio.create_task(auto_delete(msg, 40))
     await show_topup(msg, msg.from_user.id)
 
 @dp.callback_query(F.data == "pay_noop")
@@ -586,31 +586,35 @@ async def pay_manual_show(cb: types.CallbackQuery):
         parse_mode="HTML",
         reply_markup=main_kb(cb.from_user.id in ADMIN_IDS)
     )
-    asyncio.create_task(auto_delete(sent, 10))
+    asyncio.create_task(auto_delete(sent, 40))
     await cb.answer()
 
 @dp.callback_query(F.data == "pay_auto")
 async def pay_auto(cb: types.CallbackQuery, state: FSMContext):
     await state.update_data(pay_method="pay_auto")
     await state.set_state(US.topup_amount)
-    sent = await cb.message.answer(f"💰 Qancha {cur()} kiritmoqchisiz?", reply_markup=cancel_kb())
-    asyncio.create_task(auto_delete(sent, 10))
+    sent = await cb.message.answer(f"💰 Qancha {cur()} kiritmoqchisiz?",
+                                    reply_markup=main_kb(cb.from_user.id in ADMIN_IDS))
+    asyncio.create_task(auto_delete(sent, 40))
     await cb.answer()
 
 @dp.message(US.topup_amount)
 async def do_topup(msg: types.Message, state: FSMContext):
-    asyncio.create_task(auto_delete(msg, 10))
-    if msg.text == "❌ Bekor qilish":
+    asyncio.create_task(auto_delete(msg, 40))
+    main_btns = {"Buyurtma berish", "Buyurtmalar", "Hisobim", "Pul ishlash",
+                 "Hisob to'ldirish", "Murojaat", "Qo'llanma", "🗄 Boshqaruv",
+                 "❌ Bekor qilish", "◀️ Orqaga"}
+    if msg.text in main_btns:
         await state.clear()
         sent = await msg.answer("Bekor qilindi", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
-        asyncio.create_task(auto_delete(sent, 10))
+        asyncio.create_task(auto_delete(sent, 40))
         return
     try:
         amount = float(msg.text)
         if amount < 1000: raise ValueError
     except:
         err = await msg.answer("❌ Minimal miqdor 1000 Sum")
-        asyncio.create_task(auto_delete(err, 10))
+        asyncio.create_task(auto_delete(err, 40))
         return
 
     b = InlineKeyboardBuilder()
@@ -620,7 +624,7 @@ async def do_topup(msg: types.Message, state: FSMContext):
         f"To'lovni amalga oshirib 'Tasdiqlash' ni bosing.",
         reply_markup=b.as_markup()
     )
-    asyncio.create_task(auto_delete(sent, 10))
+    asyncio.create_task(auto_delete(sent, 40))
     await state.clear()
 
 @dp.callback_query(F.data.startswith("confirm_pay_"))
@@ -634,7 +638,7 @@ async def confirm_pay(cb: types.CallbackQuery):
     conn.commit(); conn.close()
     sent = await cb.message.answer(f"✅ {amount:.0f} {cur()} hisobingizga qo'shildi!",
                                     reply_markup=main_kb(uid in ADMIN_IDS))
-    asyncio.create_task(auto_delete(sent, 10))
+    asyncio.create_task(auto_delete(sent, 40))
     await cb.answer()
 
 # ═══════════════════════════════════════════════════════════
@@ -649,7 +653,7 @@ async def my_orders(msg: types.Message):
     if total == 0:
         sent = await msg.answer("❌ Sizda buyurtmalar mavjud emas.",
                                  reply_markup=main_kb(uid in ADMIN_IDS))
-        asyncio.create_task(auto_delete(sent, 10)); return
+        asyncio.create_task(auto_delete(sent, 40)); return
     st = {}
     for s in ("completed", "cancelled", "pending", "processing", "partial"):
         c.execute("SELECT COUNT(*) FROM orders WHERE user_id=? AND status=?", (uid, s))
@@ -664,20 +668,20 @@ async def my_orders(msg: types.Message):
         f"♻️ Qisman: {st['partial']} ta",
         reply_markup=main_kb(uid in ADMIN_IDS)
     )
-    asyncio.create_task(auto_delete(sent, 10))
+    asyncio.create_task(auto_delete(sent, 40))
 
 # ═══════════════════════════════════════════════════════════
 #  USER — Buyurtma berish → Platforma tanlash
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "Buyurtma berish")
 async def place_order(msg: types.Message, state: FSMContext):
-    asyncio.create_task(auto_delete(msg, 10))
+    asyncio.create_task(auto_delete(msg, 40))
     await state.set_state(US.select_platform)
     sent = await msg.answer(
         "📱 Quyidagi ijtimoiy tarmoqlardan birini tanlang:",
         reply_markup=platforms_inline_kb()
     )
-    asyncio.create_task(auto_delete(sent, 10))
+    asyncio.create_task(auto_delete(sent, 40))
 
 @dp.callback_query(F.data == "order_back_main")
 async def order_back_main(cb: types.CallbackQuery, state: FSMContext):
@@ -722,7 +726,7 @@ async def platform_selected(cb: types.CallbackQuery, state: FSMContext):
             f"{plat_name} — bo'limlar:",
             reply_markup=b.as_markup()
         )
-        asyncio.create_task(auto_delete(sent, 10))
+        asyncio.create_task(auto_delete(sent, 40))
     await cb.answer()
 
 @dp.callback_query(F.data == "back_to_platforms")
@@ -852,10 +856,13 @@ async def start_order(cb: types.CallbackQuery, state: FSMContext):
 
 @dp.message(US.enter_quantity)
 async def enter_qty(msg: types.Message, state: FSMContext):
-    if msg.text in ("❌ Bekor qilish", "◀️ Orqaga"):
+    main_btns = {"Buyurtma berish", "Buyurtmalar", "Hisobim", "Pul ishlash",
+                 "Hisob to'ldirish", "Murojaat", "Qo'llanma", "🗄 Boshqaruv",
+                 "❌ Bekor qilish", "◀️ Orqaga"}
+    if msg.text in main_btns:
         await state.clear()
         await msg.answer("Bekor qilindi", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
-        asyncio.create_task(auto_delete(msg, 10))
+        asyncio.create_task(auto_delete(msg, 40))
         return
     data = await state.get_data()
     svc  = data.get("svc")
@@ -869,11 +876,11 @@ async def enter_qty(msg: types.Message, state: FSMContext):
             raise ValueError
     except (ValueError, TypeError):
         err = await msg.answer(f"❌ Miqdor {svc[5]} – {svc[6]} orasida bo'lishi kerak")
-        asyncio.create_task(auto_delete(msg, 10))
-        asyncio.create_task(auto_delete(err, 10))
+        asyncio.create_task(auto_delete(msg, 40))
+        asyncio.create_task(auto_delete(err, 40))
         return
 
-    asyncio.create_task(auto_delete(msg, 10))
+    asyncio.create_task(auto_delete(msg, 40))
 
     qty_ask_msg_id  = data.get("qty_ask_msg_id")
     qty_ask_chat_id = data.get("qty_ask_chat_id")
@@ -891,12 +898,10 @@ async def enter_qty(msg: types.Message, state: FSMContext):
         f"📊 Miqdor: {qty} ta\n"
         f"💰 Narx: {amount:.2f} {cur()}\n\n"
         f"🔗 Linkni yuboring:\n(Masalan: https://t.me/username)",
-        reply_markup=ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="◀️ Orqaga")]],
-            resize_keyboard=True
-        )
+        reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)
     )
-    asyncio.create_task(auto_delete(sent, 10))
+    # link so'rash xabarini 40 soniyada o'chir, lekin menyu saqlanadi
+    asyncio.create_task(auto_delete(sent, 40))
     await state.update_data(link_ask_msg_id=sent.message_id,
                             link_ask_chat_id=sent.chat.id)
 
@@ -909,7 +914,7 @@ async def enter_link(msg: types.Message, state: FSMContext):
         link_ask_chat = data.get("link_ask_chat_id")
         if link_ask_id and link_ask_chat:
             asyncio.create_task(delete_msg_by_id(link_ask_chat, link_ask_id))
-        asyncio.create_task(auto_delete(msg, 10))
+        asyncio.create_task(auto_delete(msg, 40))
         await state.set_state(US.enter_quantity)
         if svc:
             plat_name = data.get("plat_name", "")
@@ -922,7 +927,7 @@ async def enter_link(msg: types.Message, state: FSMContext):
                 f"⬆️ Maksimal: {svc[6]} ta",
                 reply_markup=b.as_markup()
             )
-            asyncio.create_task(auto_delete(sent, 10))
+            asyncio.create_task(auto_delete(sent, 40))
             await state.update_data(qty_ask_msg_id=sent.message_id,
                                     qty_ask_chat_id=sent.chat.id)
         else:
@@ -941,8 +946,8 @@ async def enter_link(msg: types.Message, state: FSMContext):
             f"⚠️ Buyurtma havolasi noto'g'ri formatda kiritilmoqda!\n\n"
             f"❗ Namuna: https://havol & @havol"
         )
-        asyncio.create_task(auto_delete(msg, 10))
-        asyncio.create_task(auto_delete(err, 10))
+        asyncio.create_task(auto_delete(msg, 40))
+        asyncio.create_task(auto_delete(err, 40))
         return
 
     data      = await state.get_data()
@@ -957,7 +962,7 @@ async def enter_link(msg: types.Message, state: FSMContext):
     if link_ask_id and link_ask_chat:
         asyncio.create_task(delete_msg_by_id(link_ask_chat, link_ask_id))
 
-    asyncio.create_task(auto_delete(msg, 10))
+    asyncio.create_task(auto_delete(msg, 40))
 
     await state.update_data(link=link_text, amount=amount)
 
@@ -990,7 +995,7 @@ async def enter_link(msg: types.Message, state: FSMContext):
         f"buyurtmani bekor qilish imkoni yo'q.",
         reply_markup=b.as_markup()
     )
-    asyncio.create_task(auto_delete(confirm_msg, 10))
+    asyncio.create_task(auto_delete(confirm_msg, 40))
     await state.update_data(confirm_msg_id=confirm_msg.message_id,
                             confirm_chat_id=confirm_msg.chat.id)
 
@@ -1040,12 +1045,12 @@ async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
     )
     conn.commit(); conn.close()
 
-    order_msg = await cb.message.answer(
+    # Buyurtma qabul xabari O'CHMASSIN
+    await cb.message.answer(
         f"✅ Buyurtma qabul qilindi!\n\n"
         f"🆔 Buyurtma ID si: {order_id}",
         reply_markup=main_kb(uid in ADMIN_IDS)
     )
-    asyncio.create_task(auto_delete(order_msg, 10))
 
     if api_order_id and api_url_val and api_key_val:
         asyncio.create_task(
@@ -1066,7 +1071,7 @@ async def order_cancel(cb: types.CallbackQuery, state: FSMContext):
         "❌ Buyurtma bekor qilindi.",
         reply_markup=main_kb(cb.from_user.id in ADMIN_IDS)
     )
-    asyncio.create_task(auto_delete(cancel_msg, 10))
+    asyncio.create_task(auto_delete(cancel_msg, 40))
     await cb.answer()
 
 # ═══════════════════════════════════════════════════════════
@@ -1074,15 +1079,19 @@ async def order_cancel(cb: types.CallbackQuery, state: FSMContext):
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "Murojaat")
 async def support(msg: types.Message, state: FSMContext):
-    asyncio.create_task(auto_delete(msg, 10))
+    asyncio.create_task(auto_delete(msg, 40))
     await state.set_state(US.support_msg)
-    sent = await msg.answer("📝 Murojaat matnini yozib yuboring.", reply_markup=cancel_kb())
-    asyncio.create_task(auto_delete(sent, 10))
+    sent = await msg.answer("📝 Murojaat matnini yozib yuboring.\n\n(Bekor qilish uchun asosiy menyudan foydalaning)",
+                            reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
+    asyncio.create_task(auto_delete(sent, 40))
 
 @dp.message(US.support_msg)
 async def do_support(msg: types.Message, state: FSMContext):
-    asyncio.create_task(auto_delete(msg, 10))
-    if msg.text == "❌ Bekor qilish":
+    asyncio.create_task(auto_delete(msg, 40))
+    main_btns = {"Buyurtma berish", "Buyurtmalar", "Hisobim", "Pul ishlash",
+                 "Hisob to'ldirish", "Murojaat", "Qo'llanma", "🗄 Boshqaruv",
+                 "❌ Bekor qilish", "◀️ Orqaga"}
+    if msg.text in main_btns:
         await state.clear()
         await msg.answer("Bekor qilindi", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)); return
     for admin in ADMIN_IDS:
@@ -1093,14 +1102,14 @@ async def do_support(msg: types.Message, state: FSMContext):
             pass
     await state.clear()
     sent = await msg.answer("✅ Murojaatingiz qabul qilindi!", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
-    asyncio.create_task(auto_delete(sent, 10))
+    asyncio.create_task(auto_delete(sent, 40))
 
 # ═══════════════════════════════════════════════════════════
 #  USER — Qo'llanma
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "Qo'llanma")
 async def guides(msg: types.Message):
-    asyncio.create_task(auto_delete(msg, 10))
+    asyncio.create_task(auto_delete(msg, 40))
     conn = db(); c = conn.cursor()
     c.execute("SELECT id,title FROM guides")
     gs = c.fetchall(); conn.close()
@@ -1111,7 +1120,7 @@ async def guides(msg: types.Message):
         b.button(text=f"📖 {gtitle}", callback_data=f"guide_{gid}")
     b.adjust(1)
     sent = await msg.answer(f"📚 Qo'llanmalar ro'yhati: {len(gs)} ta", reply_markup=b.as_markup())
-    asyncio.create_task(auto_delete(sent, 10))
+    asyncio.create_task(auto_delete(sent, 40))
 
 @dp.callback_query(F.data.startswith("guide_"))
 async def show_guide(cb: types.CallbackQuery):
@@ -1121,7 +1130,7 @@ async def show_guide(cb: types.CallbackQuery):
     g = c.fetchone(); conn.close()
     if g:
         sent = await cb.message.answer(f"📖 {g[0]}\n\n{g[1]}")
-        asyncio.create_task(auto_delete(sent, 10))
+        asyncio.create_task(auto_delete(sent, 40))
     await cb.answer()
 
 # ═══════════════════════════════════════════════════════════
@@ -1129,11 +1138,11 @@ async def show_guide(cb: types.CallbackQuery):
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "◀️ Orqaga")
 async def go_back(msg: types.Message, state: FSMContext):
-    asyncio.create_task(auto_delete(msg, 10))
+    asyncio.create_task(auto_delete(msg, 40))
     await state.clear()
     is_admin = msg.from_user.id in ADMIN_IDS
     sent = await msg.answer("🖥 Asosiy menyudasiz!", reply_markup=main_kb(is_admin))
-    asyncio.create_task(auto_delete(sent, 10))
+    asyncio.create_task(auto_delete(sent, 40))
 
 # ═══════════════════════════════════════════════════════════
 #  ADMIN — Boshqaruv
@@ -1142,10 +1151,10 @@ async def go_back(msg: types.Message, state: FSMContext):
 async def admin_panel(msg: types.Message, state: FSMContext):
     if msg.from_user.id not in ADMIN_IDS:
         await msg.answer("❌ Siz admin emassiz!"); return
-    asyncio.create_task(auto_delete(msg, 10))
+    asyncio.create_task(auto_delete(msg, 40))
     await state.clear()
     sent = await msg.answer("Admin paneliga xush kelibsiz!", reply_markup=admin_kb())
-    asyncio.create_task(auto_delete(sent, 10))
+    asyncio.create_task(auto_delete(sent, 40))
 
 # ── Statistika ─────────────────────────────────────────────
 @dp.message(F.text == "📊 Statistika")
