@@ -139,13 +139,19 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS manual_payments (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         pay_type    TEXT NOT NULL DEFAULT 'uzcart',
+        name        TEXT NOT NULL DEFAULT '',
         card_number TEXT NOT NULL,
         card_expiry TEXT NOT NULL,
         card_holder TEXT NOT NULL,
         is_active   INTEGER DEFAULT 1
     )""")
 
-    # Eski jadvalga pay_type ustuni qo'shish (migration)
+    # Migration: name ustuni qo'shish
+    try:
+        c.execute("ALTER TABLE manual_payments ADD COLUMN name TEXT NOT NULL DEFAULT ''")
+    except Exception:
+        pass
+    # Migration: pay_type ustuni qo'shish
     try:
         c.execute("ALTER TABLE manual_payments ADD COLUMN pay_type TEXT NOT NULL DEFAULT 'uzcart'")
     except Exception:
@@ -338,6 +344,7 @@ class AS(StatesGroup):
     broadcast_uid_msg  = State()
     user_id_input      = State()
     balance_amount     = State()
+    mpay_name          = State()
     mpay_card          = State()
     mpay_expiry        = State()
     mpay_holder        = State()
@@ -496,8 +503,16 @@ async def cmd_start(msg: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "check_sub")
 async def cb_check_sub(cb: types.CallbackQuery):
     if await check_sub(cb.from_user.id):
-        await cb.message.answer("✅ Tasdiqlandi!\n🖥 Asosiy menyudasiz!",
-                                 reply_markup=main_kb(cb.from_user.id in ADMIN_IDS))
+        # Obuna so'rash xabarini o'chirish
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+        await cb.message.answer(
+            "✅ Siz barcha kanallarga obuna bo'ldingiz, rahmat!\n\n"
+            "Pastki menyulardan foydalanishingiz mumkin 👇",
+            reply_markup=main_kb(cb.from_user.id in ADMIN_IDS)
+        )
         await cb.answer("✅ Tasdiqlandi!")
     else:
         await cb.answer("❌ Siz hali obuna bo'lmadingiz!", show_alert=True)
@@ -612,14 +627,15 @@ async def pay_noop(cb: types.CallbackQuery):
 async def pay_manual_show(cb: types.CallbackQuery):
     pid = int(cb.data.replace("pay_manual_", ""))
     conn = db(); c = conn.cursor()
-    c.execute("SELECT pay_type, card_number, card_expiry, card_holder FROM manual_payments WHERE id=?", (pid,))
+    c.execute("SELECT pay_type, name, card_number, card_expiry, card_holder FROM manual_payments WHERE id=?", (pid,))
     pay = c.fetchone(); conn.close()
     if not pay:
         await cb.answer("❌ Topilmadi", show_alert=True); return
-    ptype, pcard, pexpiry, pholder = pay
-    type_name = "Uzcart" if ptype == "uzcart" else "Humo"
+    ptype, pname, pcard, pexpiry, pholder = pay
+    type_name   = "Uzcart" if ptype == "uzcart" else "Humo"
+    display_name = pname if pname else type_name
     sent = await cb.message.answer(
-        f"💳 <b>{type_name} karta</b>\n\n"
+        f"💳 <b>{display_name}</b> ({type_name})\n\n"
         f"🔢 Karta raqami: <code>{pcard}</code>\n"
         f"📅 Amal qilish muddati: <b>{pexpiry}</b>\n"
         f"👤 Karta egasi: <b>{pholder}</b>\n\n"
@@ -1448,13 +1464,14 @@ async def payment_methods(msg: types.Message):
 async def pay_manual_settings(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
     conn = db(); c = conn.cursor()
-    c.execute("SELECT id, pay_type, card_number, is_active FROM manual_payments")
+    c.execute("SELECT id, pay_type, name, card_number, is_active FROM manual_payments")
     pays = c.fetchall(); conn.close()
     b = InlineKeyboardBuilder()
-    for pid, ptype, pcard, pact in pays:
+    for pid, ptype, pname, pcard, pact in pays:
         st       = "✅" if pact else "❌"
         type_nm  = "Uzcart" if ptype == "uzcart" else "Humo"
-        b.button(text=f"{st} {type_nm} — {pcard[:8]}...", callback_data=f"pay_tog_{pid}")
+        disp_nm  = pname if pname else type_nm
+        b.button(text=f"{st} {disp_nm} ({type_nm})", callback_data=f"pay_tog_{pid}")
     b.button(text="➕ To'lov qo'shish", callback_data="add_mpay")
     b.adjust(1)
     try:
@@ -1514,10 +1531,22 @@ async def add_mpay(cb: types.CallbackQuery, state: FSMContext):
 async def mpay_type_select(cb: types.CallbackQuery, state: FSMContext):
     ptype = cb.data.replace("mpay_type_", "")
     await state.update_data(mpay_type=ptype)
-    await state.set_state(AS.mpay_card)
+    await state.set_state(AS.mpay_name)
     type_name = "Uzcart" if ptype == "uzcart" else "Humo"
-    await cb.message.answer(f"🔢 {type_name} karta raqami:", reply_markup=cancel_kb())
+    await cb.message.answer(
+        f"💳 {type_name} to'lov qo'shish\n\n"
+        f"📝 To'lov nomini kiriting:\n(Masalan: Asosiy karta, Shaxsiy karta)",
+        reply_markup=cancel_kb()
+    )
     await cb.answer()
+
+@dp.message(AS.mpay_name)
+async def mpay_name_h(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    await state.update_data(mpay_name=msg.text)
+    await state.set_state(AS.mpay_card)
+    await msg.answer("🔢 Karta raqamini kiriting:\n(Masalan: 8600 1234 5678 9012)")
 
 @dp.message(AS.mpay_card)
 async def mpay_card_h(msg: types.Message, state: FSMContext):
@@ -1525,7 +1554,7 @@ async def mpay_card_h(msg: types.Message, state: FSMContext):
         await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
     await state.update_data(mpay_card=msg.text)
     await state.set_state(AS.mpay_expiry)
-    await msg.answer("📅 Amal qilish muddati (masalan: 12/26):")
+    await msg.answer("📅 Karta muddatini kiriting:\n(Masalan: 12/26)")
 
 @dp.message(AS.mpay_expiry)
 async def mpay_expiry_h(msg: types.Message, state: FSMContext):
@@ -1533,7 +1562,7 @@ async def mpay_expiry_h(msg: types.Message, state: FSMContext):
         await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
     await state.update_data(mpay_expiry=msg.text)
     await state.set_state(AS.mpay_holder)
-    await msg.answer("👤 Karta egasi (Ism Familya):")
+    await msg.answer("👤 Karta egasining Ism Familiyasini kiriting:\n(Masalan: AZIZ KARIMOV)")
 
 @dp.message(AS.mpay_holder)
 async def mpay_holder_h(msg: types.Message, state: FSMContext):
@@ -1541,12 +1570,21 @@ async def mpay_holder_h(msg: types.Message, state: FSMContext):
         await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
     data = await state.get_data()
     conn = db(); c = conn.cursor()
-    c.execute("INSERT INTO manual_payments(pay_type, card_number, card_expiry, card_holder) VALUES(?,?,?,?)",
-              (data.get("mpay_type", "uzcart"), data["mpay_card"], data["mpay_expiry"], msg.text))
+    c.execute("INSERT INTO manual_payments(pay_type, name, card_number, card_expiry, card_holder) VALUES(?,?,?,?,?)",
+              (data.get("mpay_type", "uzcart"), data.get("mpay_name",""), data["mpay_card"], data["mpay_expiry"], msg.text))
     conn.commit(); conn.close()
     await state.clear()
     type_name = "Uzcart" if data.get("mpay_type") == "uzcart" else "Humo"
-    await msg.answer(f"✅ {type_name} to'lov tizimi qo'shildi!", reply_markup=admin_kb())
+    pname     = data.get("mpay_name", type_name)
+    await msg.answer(
+        f"✅ To'lov tizimi qo'shildi!\n\n"
+        f"💳 Turi: {type_name}\n"
+        f"📝 Nomi: {pname}\n"
+        f"🔢 Karta: {data['mpay_card']}\n"
+        f"📅 Muddat: {data['mpay_expiry']}\n"
+        f"👤 Egasi: {msg.text}",
+        reply_markup=admin_kb()
+    )
 
 @dp.callback_query(F.data.startswith("pay_tog_"))
 async def pay_toggle(cb: types.CallbackQuery):
