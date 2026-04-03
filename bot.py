@@ -62,6 +62,163 @@ def get_platforms_list():
 DB = "smm_bot.db"
 
 # ─────────────────────────────────────────────────────────────
+#  JSONBIN — Ma'lumotlarni bulutda saqlash (hosting reset bo'lganda yo'qolmasin)
+# ─────────────────────────────────────────────────────────────
+JSONBIN_API_KEY = "$2a$10$mQZC26SFNwuUJbIo3fANVO3eiIMW4jWdJTva4/6tBlESt4AAde.mi"
+JSONBIN_BIN_ID  = "69cc43a2856a682189e936f0"
+JSONBIN_URL     = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+
+async def jsonbin_save():
+    """Barcha muhim ma'lumotlarni JSONBin ga saqlaydi"""
+    try:
+        conn = db(); c = conn.cursor()
+
+        c.execute("SELECT key,name,sort_order FROM platforms")
+        platforms = [{"key":r[0],"name":r[1],"sort_order":r[2]} for r in c.fetchall()]
+
+        c.execute("SELECT id,name,platform,is_active FROM categories")
+        categories = [{"id":r[0],"name":r[1],"platform":r[2],"is_active":r[3]} for r in c.fetchall()]
+
+        c.execute("SELECT id,name,url,api_key,price_per1000 FROM apis")
+        apis = [{"id":r[0],"name":r[1],"url":r[2],"api_key":r[3],"price_per1000":r[4]} for r in c.fetchall()]
+
+        c.execute("SELECT id,category_id,api_id,api_service_id,name,min_qty,max_qty,price_per1000,is_active FROM services")
+        services = [{"id":r[0],"category_id":r[1],"api_id":r[2],"api_service_id":r[3],"name":r[4],"min_qty":r[5],"max_qty":r[6],"price_per1000":r[7],"is_active":r[8]} for r in c.fetchall()]
+
+        c.execute("SELECT id,pay_type,name,card_number,card_expiry,card_holder,is_active FROM manual_payments")
+        payments = [{"id":r[0],"pay_type":r[1],"name":r[2],"card_number":r[3],"card_expiry":r[4],"card_holder":r[5],"is_active":r[6]} for r in c.fetchall()]
+
+        c.execute("SELECT channel_id,channel_name,channel_link FROM channels")
+        channels = [{"channel_id":r[0],"channel_name":r[1],"channel_link":r[2]} for r in c.fetchall()]
+
+        c.execute("SELECT key,value FROM settings")
+        settings = {r[0]:r[1] for r in c.fetchall()}
+
+        c.execute("SELECT id,title,content FROM guides")
+        guides = [{"id":r[0],"title":r[1],"content":r[2]} for r in c.fetchall()]
+
+        conn.close()
+
+        data = {
+            "platforms": platforms,
+            "categories": categories,
+            "apis": apis,
+            "services": services,
+            "payments": payments,
+            "channels": channels,
+            "settings": settings,
+            "guides": guides,
+        }
+
+        async with aiohttp.ClientSession() as s:
+            async with s.put(
+                JSONBIN_URL,
+                headers={"Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY},
+                json=data,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as r:
+                if r.status == 200:
+                    logger.info("✅ JSONBin ga saqlandi!")
+                    return True
+                else:
+                    logger.error(f"JSONBin xato: {r.status}")
+                    return False
+    except Exception as e:
+        logger.error(f"jsonbin_save xato: {e}")
+        return False
+
+async def jsonbin_restore():
+    """JSONBin dan ma'lumotlarni tiklaydi (faqat bo'sh bo'lsa)"""
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(
+                JSONBIN_URL + "/latest",
+                headers={"X-Master-Key": JSONBIN_API_KEY},
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as r:
+                if r.status != 200:
+                    logger.warning(f"JSONBin o'qish xato: {r.status}")
+                    return False
+                result = await r.json()
+                data = result.get("record", {})
+
+        conn = db(); c = conn.cursor()
+
+        # Platformalar
+        if data.get("platforms"):
+            c.execute("SELECT COUNT(*) FROM platforms"); cnt = c.fetchone()[0]
+            if cnt == 0:
+                for p in data["platforms"]:
+                    c.execute("INSERT OR IGNORE INTO platforms(key,name,sort_order) VALUES(?,?,?)",
+                              (p["key"], p["name"], p.get("sort_order",0)))
+
+        # Kategoriyalar
+        if data.get("categories"):
+            c.execute("SELECT COUNT(*) FROM categories"); cnt = c.fetchone()[0]
+            if cnt == 0:
+                for cat in data["categories"]:
+                    c.execute("INSERT INTO categories(id,name,platform,is_active) VALUES(?,?,?,?)",
+                              (cat["id"],cat["name"],cat["platform"],cat["is_active"]))
+
+        # API lar
+        if data.get("apis"):
+            c.execute("SELECT COUNT(*) FROM apis"); cnt = c.fetchone()[0]
+            if cnt == 0:
+                for api in data["apis"]:
+                    c.execute("INSERT INTO apis(id,name,url,api_key,price_per1000) VALUES(?,?,?,?,?)",
+                              (api["id"],api["name"],api["url"],api["api_key"],api["price_per1000"]))
+
+        # Xizmatlar
+        if data.get("services"):
+            c.execute("SELECT COUNT(*) FROM services"); cnt = c.fetchone()[0]
+            if cnt == 0:
+                for svc in data["services"]:
+                    c.execute("INSERT INTO services(id,category_id,api_id,api_service_id,name,min_qty,max_qty,price_per1000,is_active) VALUES(?,?,?,?,?,?,?,?,?)",
+                              (svc["id"],svc["category_id"],svc["api_id"],svc["api_service_id"],svc["name"],svc["min_qty"],svc["max_qty"],svc["price_per1000"],svc["is_active"]))
+
+        # To'lov tizimlari
+        if data.get("payments"):
+            c.execute("SELECT COUNT(*) FROM manual_payments"); cnt = c.fetchone()[0]
+            if cnt == 0:
+                for p in data["payments"]:
+                    c.execute("INSERT INTO manual_payments(id,pay_type,name,card_number,card_expiry,card_holder,is_active) VALUES(?,?,?,?,?,?,?)",
+                              (p["id"],p["pay_type"],p["name"],p["card_number"],p["card_expiry"],p["card_holder"],p["is_active"]))
+
+        # Kanallar
+        if data.get("channels"):
+            c.execute("SELECT COUNT(*) FROM channels"); cnt = c.fetchone()[0]
+            if cnt == 0:
+                for ch in data["channels"]:
+                    c.execute("INSERT INTO channels(channel_id,channel_name,channel_link) VALUES(?,?,?)",
+                              (ch["channel_id"],ch["channel_name"],ch["channel_link"]))
+
+        # Sozlamalar
+        if data.get("settings"):
+            for k, v in data["settings"].items():
+                c.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (k, v))
+
+        # Qo'llanmalar
+        if data.get("guides"):
+            c.execute("SELECT COUNT(*) FROM guides"); cnt = c.fetchone()[0]
+            if cnt == 0:
+                for g in data["guides"]:
+                    c.execute("INSERT INTO guides(id,title,content) VALUES(?,?,?)",
+                              (g["id"],g["title"],g["content"]))
+
+        conn.commit(); conn.close()
+        logger.info("✅ JSONBin dan ma'lumotlar tiklandi!")
+        return True
+    except Exception as e:
+        logger.error(f"jsonbin_restore xato: {e}")
+        return False
+
+async def jsonbin_autosave_loop():
+    """Har 10 daqiqada avtomatik saqlaydi"""
+    while True:
+        await asyncio.sleep(600)
+        await jsonbin_save()
+
+# ─────────────────────────────────────────────────────────────
 #  DATABASE
 # ─────────────────────────────────────────────────────────────
 def db():
@@ -384,13 +541,13 @@ def main_kb(is_admin=False):
 
 def admin_kb():
     return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="⚙️ Asosiy sozlamalar")],
         [KeyboardButton(text="📊 Statistika"),         KeyboardButton(text="📨 Xabar yuborish")],
         [KeyboardButton(text="🔒 Majbur obuna kanallar")],
         [KeyboardButton(text="💳 To'lov tizimlar"),   KeyboardButton(text="🔑 API")],
         [KeyboardButton(text="👩‍💻 Foydalanuvchini boshqarish")],
         [KeyboardButton(text="📚 Qo'llanmalar"),       KeyboardButton(text="📈 Buyurtmalar")],
         [KeyboardButton(text="📁 Xizmatlar")],
-        [KeyboardButton(text="⚙️ Asosiy sozlamalar")],
         [KeyboardButton(text="◀️ Orqaga")],
     ], resize_keyboard=True)
 
@@ -1619,6 +1776,7 @@ async def do_add_channel(msg: types.Message, state: FSMContext):
     conn.commit(); conn.close()
     await state.clear()
     await msg.answer(f"✅ Kanal qo'shildi: {parts[1]}", reply_markup=admin_kb())
+    asyncio.create_task(jsonbin_save())
 
 @dp.callback_query(F.data.startswith("del_ch_"))
 async def del_ch(cb: types.CallbackQuery):
@@ -1768,6 +1926,7 @@ async def mpay_holder_h(msg: types.Message, state: FSMContext):
         f"👤 Egasi: {msg.text}",
         reply_markup=admin_kb()
     )
+    asyncio.create_task(jsonbin_save())
 
 @dp.callback_query(F.data.startswith("pay_tog_"))
 async def pay_toggle(cb: types.CallbackQuery):
@@ -1840,6 +1999,7 @@ async def api_key_h(msg: types.Message, state: FSMContext):
         f"⏳ API bot hisobi tekshirilmoqda...",
         reply_markup=admin_kb()
     )
+    asyncio.create_task(jsonbin_save())
 
     # API balansini tekshirish
     bal, cur_val = await api_balance(data["api_url"], msg.text)
@@ -2070,11 +2230,12 @@ async def plat_ren_save(msg: types.Message, state: FSMContext):
         conn.commit(); conn.close()
         await state.clear()
         await msg.answer(f"✅ Platforma qo'shildi: {new_name}", reply_markup=admin_kb())
-    else:
+        asyncio.create_task(jsonbin_save())
         c.execute("UPDATE platforms SET name=? WHERE id=?", (new_name, pid))
         conn.commit(); conn.close()
         await state.clear()
         await msg.answer(f"✅ Platforma nomi o'zgartirildi: {new_name}", reply_markup=admin_kb())
+        asyncio.create_task(jsonbin_save())
 
 # ── Platforma o'chirish ───────────────────────────────────
 @dp.callback_query(F.data.startswith("plat_del_") & ~F.data.startswith("plat_del_confirm_") & ~F.data.startswith("plat_del_cancel"))
@@ -2176,6 +2337,7 @@ async def do_set_referral(msg: types.Message, state: FSMContext):
     set_setting("referral_bonus", str(val))
     await state.clear()
     await msg.answer(f"✅ Referal bonus o'zgartirildi: {val} {cur()}", reply_markup=admin_kb())
+    asyncio.create_task(jsonbin_save())
 
 @dp.callback_query(F.data == "set_currency")
 async def set_currency_start(cb: types.CallbackQuery, state: FSMContext):
@@ -2365,6 +2527,7 @@ async def do_add_cat(msg: types.Message, state: FSMContext):
     conn.commit(); conn.close()
     await state.clear()
     await msg.answer(f"✅ Bo'lim qo'shildi: {msg.text}", reply_markup=admin_kb())
+    asyncio.create_task(jsonbin_save())
 
 @dp.callback_query(F.data.startswith("cat_") & ~F.data.startswith("cat_add") & ~F.data.startswith("cat_plat_") & ~F.data.startswith("cat_svc") & ~F.data.startswith("cat_svcs_"))
 async def cat_detail(cb: types.CallbackQuery):
@@ -2554,6 +2717,7 @@ async def svc_confirm_save(cb: types.CallbackQuery, state: FSMContext):
             f"📁 {cat_name}  ({svc_count} ta xizmat)",
             reply_markup=b.as_markup()
         )
+    asyncio.create_task(jsonbin_save())
     await cb.answer()
 
 @dp.callback_query(F.data == "svc_edit_name")
@@ -2706,7 +2870,10 @@ async def svc_del(cb: types.CallbackQuery):
 # ═══════════════════════════════════════════════════════════
 async def main():
     init_db()
+    logger.info("✅ JSONBin dan ma'lumotlar tiklanmoqda...")
+    await jsonbin_restore()
     logger.info("✅ SMM Bot ishga tushdi!")
+    asyncio.create_task(jsonbin_autosave_loop())
     await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
