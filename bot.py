@@ -135,13 +135,23 @@ def init_db():
         created_at  TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
+    c.execute("""CREATE TABLE IF NOT EXISTS topup_requests (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id     INTEGER,
+        amount      REAL,
+        pay_id      INTEGER,
+        check_file_id TEXT,
+        status      TEXT DEFAULT 'pending',
+        created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+
     # manual_payments: nom yo'q, faqat karta raqam, muddati, ism familiya
     c.execute("""CREATE TABLE IF NOT EXISTS manual_payments (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         pay_type    TEXT NOT NULL DEFAULT 'uzcart',
         name        TEXT NOT NULL DEFAULT '',
         card_number TEXT NOT NULL,
-        card_expiry TEXT NOT NULL,
+        card_expiry TEXT NOT NULL DEFAULT '',
         card_holder TEXT NOT NULL,
         is_active   INTEGER DEFAULT 1
     )""")
@@ -323,6 +333,7 @@ class US(StatesGroup):
     enter_link       = State()
     enter_quantity   = State()
     topup_amount     = State()
+    topup_check      = State()
     support_msg      = State()
 
 class AS(StatesGroup):
@@ -354,6 +365,8 @@ class AS(StatesGroup):
     guide_content      = State()
     plat_rename_key    = State()
     plat_rename_val    = State()
+    topup_reply_uid    = State()
+    topup_reply_msg    = State()
 
 # ─────────────────────────────────────────────────────────────
 #  KEYBOARDS
@@ -567,50 +580,29 @@ async def earn(msg: types.Message):
 # ═══════════════════════════════════════════════════════════
 async def show_topup(message: types.Message, uid: int):
     conn = db(); c = conn.cursor()
-    c.execute("SELECT id, pay_type FROM manual_payments WHERE is_active=1")
+    c.execute("SELECT id, pay_type, name FROM manual_payments WHERE is_active=1")
     mpays = c.fetchall(); conn.close()
 
-    b = InlineKeyboardBuilder()
-
-    # Auto to'lov tugmasi
+    rows = []
     if get_setting("payme_active") == "1" or get_setting("click_active") == "1":
-        b.button(text="💠 Avto-to'lov (Payme, Click)", callback_data="pay_auto")
-        b.adjust(1)
+        rows.append([InlineKeyboardButton(text="💠 Avto-to'lov (Payme, Click)", callback_data="pay_auto")])
 
-    # Uzcart va Humo — har biri ID bo'yicha chiqadi, 2x grid
-    uzcart_btns = []
-    humo_btns   = []
-    for pid, ptype in mpays:
-        if ptype == "uzcart":
-            uzcart_btns.append((pid, "💳 Uzcart"))
-        elif ptype == "humo":
-            humo_btns.append((pid, "🟠 Humo"))
+    pair = []
+    for pid, ptype, pname in mpays:
+        icon = "💳" if ptype == "uzcart" else "🟠"
+        disp = pname if pname else ("Uzcart" if ptype == "uzcart" else "Humo")
+        pair.append(InlineKeyboardButton(text=f"{icon} {disp}", callback_data=f"pay_manual_{pid}"))
+        if len(pair) == 2:
+            rows.append(pair); pair = []
+    if pair:
+        rows.append(pair)
 
-    # Birinchi juftlikni chap-o'ng qo'yamiz
-    max_pairs = max(len(uzcart_btns), len(humo_btns))
-    if max_pairs > 0:
-        for i in range(max_pairs):
-            if i < len(uzcart_btns):
-                pid, ptxt = uzcart_btns[i]
-                b.button(text=ptxt, callback_data=f"pay_manual_{pid}")
-            else:
-                b.button(text=" ", callback_data="pay_noop")
-            if i < len(humo_btns):
-                pid, ptxt = humo_btns[i]
-                b.button(text=ptxt, callback_data=f"pay_manual_{pid}")
-            else:
-                b.button(text=" ", callback_data="pay_noop")
-        b.adjust(2)
-    else:
-        # Agar hech to'lov yo'q bo'lsa
-        pass
-
-    kb = b.as_markup()
-    if not kb.inline_keyboard:
+    if not rows:
         sent = await message.answer("❌ Hozirda to'lov tizimlari faol emas.",
                                     reply_markup=main_kb(uid in ADMIN_IDS))
-        asyncio.create_task(auto_delete(sent, 40))
-        return
+        asyncio.create_task(auto_delete(sent, 40)); return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
     sent = await message.answer("💳 Quyidagilardan birini tanlang:", reply_markup=kb)
     asyncio.create_task(auto_delete(sent, 40))
 
@@ -624,27 +616,28 @@ async def pay_noop(cb: types.CallbackQuery):
     await cb.answer()
 
 @dp.callback_query(F.data.startswith("pay_manual_") & ~F.data.startswith("pay_manual_settings"))
-async def pay_manual_show(cb: types.CallbackQuery):
+async def pay_manual_show(cb: types.CallbackQuery, state: FSMContext):
     pid_str = cb.data.replace("pay_manual_", "")
     try:
         pid = int(pid_str)
     except ValueError:
         await cb.answer(); return
     conn = db(); c = conn.cursor()
-    c.execute("SELECT pay_type, name, card_number, card_expiry, card_holder FROM manual_payments WHERE id=?", (pid,))
+    c.execute("SELECT pay_type, name, card_number, card_holder FROM manual_payments WHERE id=?", (pid,))
     pay = c.fetchone(); conn.close()
     if not pay:
         await cb.answer("❌ Topilmadi", show_alert=True); return
-    ptype, pname, pcard, pexpiry, pholder = pay
-    type_name   = "Uzcart" if ptype == "uzcart" else "Humo"
+    ptype, pname, pcard, pholder = pay
+    type_name    = "Uzcart" if ptype == "uzcart" else "Humo"
     display_name = pname if pname else type_name
+
+    await state.update_data(topup_pay_id=pid, topup_pay_name=display_name,
+                            topup_card=pcard, topup_holder=pholder, topup_type=type_name)
+    await state.set_state(US.topup_amount)
     sent = await cb.message.answer(
-        f"💳 <b>{display_name}</b> ({type_name})\n\n"
-        f"🔢 Karta raqami: <code>{pcard}</code>\n"
-        f"📅 Amal qilish muddati: <b>{pexpiry}</b>\n"
-        f"👤 Karta egasi: <b>{pholder}</b>\n\n"
-        f"Ushbu kartaga pul o'tkazing va admin bilan bog'laning.",
-        parse_mode="HTML",
+        f"💳 {display_name} ({type_name})\n\n"
+        f"Qancha miqdorda to'ldirmoqchisiz? ({cur()})\n"
+        f"Minimal: 1000 {cur()}",
         reply_markup=main_kb(cb.from_user.id in ADMIN_IDS)
     )
     asyncio.create_task(auto_delete(sent, 40))
@@ -671,36 +664,98 @@ async def do_topup(msg: types.Message, state: FSMContext):
         asyncio.create_task(auto_delete(sent, 40))
         return
     try:
-        amount = float(msg.text)
+        amount = float(msg.text.replace(" ", "").replace(",", "."))
         if amount < 1000: raise ValueError
     except:
-        err = await msg.answer("❌ Minimal miqdor 1000 Sum")
-        asyncio.create_task(auto_delete(err, 40))
-        return
+        err = await msg.answer(f"❌ Minimal miqdor 1000 {cur()}, faqat raqam kiriting")
+        asyncio.create_task(auto_delete(err, 40)); return
 
-    b = InlineKeyboardBuilder()
-    b.button(text="✅ To'lovni tasdiqlash (test)", callback_data=f"confirm_pay_{amount}")
+    data = await state.get_data()
+    pay_id   = data.get("topup_pay_id")
+    pay_name = data.get("topup_pay_name", "")
+    pcard    = data.get("topup_card", "")
+    pholder  = data.get("topup_holder", "")
+    ptype    = data.get("topup_type", "")
+
+    await state.update_data(topup_amount=amount)
+    await state.set_state(US.topup_check)
+
     sent = await msg.answer(
-        f"💰 To'lov miqdori: {amount:.0f} {cur()}\n"
-        f"To'lovni amalga oshirib 'Tasdiqlash' ni bosing.",
-        reply_markup=b.as_markup()
+        f"💳 <b>{pay_name}</b> ({ptype})\n\n"
+        f"🔢 Karta raqami: <code>{pcard}</code>\n"
+        f"👤 Karta egasi: <b>{pholder}</b>\n\n"
+        f"💰 To'lov miqdori: <b>{amount:.0f} {cur()}</b>\n\n"
+        f"Ushbu kartaga pul o'tkazing va chek (skrinshot) yuboring 👇",
+        parse_mode="HTML",
+        reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)
     )
     asyncio.create_task(auto_delete(sent, 40))
+
+@dp.message(US.topup_check)
+async def do_topup_check(msg: types.Message, state: FSMContext):
+    main_btns = {"Buyurtma berish", "Buyurtmalar", "Hisobim", "Pul ishlash",
+                 "Hisob to'ldirish", "Murojaat", "Qo'llanma", "🗄 Boshqaruv",
+                 "❌ Bekor qilish", "◀️ Orqaga"}
+    if msg.text and msg.text in main_btns:
+        await state.clear()
+        await msg.answer("Bekor qilindi", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)); return
+
+    # Rasm yoki hujjat bo'lishi kerak
+    file_id = None
+    if msg.photo:
+        file_id = msg.photo[-1].file_id
+    elif msg.document:
+        file_id = msg.document.file_id
+    else:
+        err = await msg.answer("❌ Iltimos, chek rasmini yuboring (foto yoki fayl)")
+        asyncio.create_task(auto_delete(err, 40)); return
+
+    data   = await state.get_data()
+    amount = data.get("topup_amount", 0)
+    pay_id = data.get("topup_pay_id", 0)
+    uid    = msg.from_user.id
+
+    conn = db(); c = conn.cursor()
+    c.execute("INSERT INTO topup_requests(user_id, amount, pay_id, check_file_id, status) VALUES(?,?,?,?,?)",
+              (uid, amount, pay_id, file_id, "pending"))
+    req_id = c.lastrowid
+    conn.commit(); conn.close()
+
     await state.clear()
 
-@dp.callback_query(F.data.startswith("confirm_pay_"))
-async def confirm_pay(cb: types.CallbackQuery):
-    amount = float(cb.data.replace("confirm_pay_", ""))
-    uid    = cb.from_user.id
-    conn   = db(); c = conn.cursor()
-    c.execute("UPDATE users SET balance=balance+?, total_dep=total_dep+? WHERE user_id=?", (amount, amount, uid))
-    c.execute("INSERT INTO transactions(user_id,amount,type,description) VALUES(?,?,?,?)",
-              (uid, amount, "deposit", "Hisob to'ldirish"))
-    conn.commit(); conn.close()
-    sent = await cb.message.answer(f"✅ {amount:.0f} {cur()} hisobingizga qo'shildi!",
-                                    reply_markup=main_kb(uid in ADMIN_IDS))
-    asyncio.create_task(auto_delete(sent, 40))
-    await cb.answer()
+    # Foydalanuvchiga xabar
+    await msg.answer(
+        f"✅ Chekingiz qabul qilindi!\n\n"
+        f"💰 Miqdor: {amount:.0f} {cur()}\n"
+        f"🆔 So'rov ID: #{req_id}\n\n"
+        f"Admin tasdiqlashini kuting ⏳",
+        reply_markup=main_kb(uid in ADMIN_IDS)
+    )
+
+    # Adminga xabar + chek
+    u = get_user(uid)
+    uname = f"@{u[1]}" if u and u[1] else f"ID: {uid}"
+    caption = (
+        f"💰 Yangi to'ldirish so'rovi!\n\n"
+        f"👤 Foydalanuvchi: {u[2] if u else uid} ({uname})\n"
+        f"🆔 ID: {uid}\n"
+        f"💵 Miqdor: {amount:.0f} {cur()}\n"
+        f"🆔 So'rov: #{req_id}"
+    )
+    b = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Tasdiqlash",  callback_data=f"topup_ok_{req_id}"),
+        InlineKeyboardButton(text="❌ Bekor qilish", callback_data=f"topup_no_{req_id}"),
+    ],[
+        InlineKeyboardButton(text="💬 Foydalanuvchiga xabar", callback_data=f"topup_msg_{uid}"),
+    ]])
+    for admin_id in ADMIN_IDS:
+        try:
+            if msg.photo:
+                await bot.send_photo(admin_id, file_id, caption=caption, reply_markup=b)
+            else:
+                await bot.send_document(admin_id, file_id, caption=caption, reply_markup=b)
+        except Exception:
+            pass
 
 # ═══════════════════════════════════════════════════════════
 #  USER — Buyurtmalar
@@ -1142,8 +1197,11 @@ async def order_cancel(cb: types.CallbackQuery, state: FSMContext):
 async def support(msg: types.Message, state: FSMContext):
     asyncio.create_task(auto_delete(msg, 40))
     await state.set_state(US.support_msg)
-    sent = await msg.answer("📝 Murojaat matnini yozib yuboring.\n\n(Bekor qilish uchun asosiy menyudan foydalaning)",
-                            reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
+    sent = await msg.answer(
+        "📝 Murojaat matnini yoki rasmini yuboring.\n\n"
+        "Matn, rasm yoki rasm+izoh yuborishingiz mumkin.",
+        reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)
+    )
     asyncio.create_task(auto_delete(sent, 40))
 
 @dp.message(US.support_msg)
@@ -1152,17 +1210,33 @@ async def do_support(msg: types.Message, state: FSMContext):
     main_btns = {"Buyurtma berish", "Buyurtmalar", "Hisobim", "Pul ishlash",
                  "Hisob to'ldirish", "Murojaat", "Qo'llanma", "🗄 Boshqaruv",
                  "❌ Bekor qilish", "◀️ Orqaga"}
-    if msg.text in main_btns:
+    if msg.text and msg.text in main_btns:
         await state.clear()
         await msg.answer("Bekor qilindi", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)); return
+
+    uid   = msg.from_user.id
+    uname = f"@{msg.from_user.username}" if msg.from_user.username else f"ID: {uid}"
+    header = f"📩 Yangi murojaat!\n👤 {msg.from_user.full_name} ({uname})\n🆔 {uid}"
+
+    b = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="💬 Javob berish", callback_data=f"topup_msg_{uid}")
+    ]])
+
     for admin in ADMIN_IDS:
         try:
-            await bot.send_message(admin,
-                f"📩 Yangi murojaat!\n👤 {msg.from_user.full_name}\n🆔 {msg.from_user.id}\n📝 {msg.text}")
-        except:
+            if msg.photo:
+                caption = header + (f"\n📝 {msg.caption}" if msg.caption else "")
+                await bot.send_photo(admin, msg.photo[-1].file_id, caption=caption, reply_markup=b)
+            elif msg.document:
+                caption = header + (f"\n📝 {msg.caption}" if msg.caption else "")
+                await bot.send_document(admin, msg.document.file_id, caption=caption, reply_markup=b)
+            else:
+                await bot.send_message(admin, header + f"\n📝 {msg.text}", reply_markup=b)
+        except Exception:
             pass
+
     await state.clear()
-    sent = await msg.answer("✅ Murojaatingiz qabul qilindi!", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS))
+    sent = await msg.answer("✅ Murojaatingiz qabul qilindi!", reply_markup=main_kb(uid in ADMIN_IDS))
     asyncio.create_task(auto_delete(sent, 40))
 
 # ═══════════════════════════════════════════════════════════
@@ -1193,6 +1267,110 @@ async def show_guide(cb: types.CallbackQuery):
         sent = await cb.message.answer(f"📖 {g[0]}\n\n{g[1]}")
         asyncio.create_task(auto_delete(sent, 40))
     await cb.answer()
+
+# ═══════════════════════════════════════════════════════════
+#  ADMIN — To'ldirish so'rovini tasdiqlash / bekor qilish
+# ═══════════════════════════════════════════════════════════
+@dp.callback_query(F.data.startswith("topup_ok_"))
+async def topup_ok(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    req_id = int(cb.data.replace("topup_ok_", ""))
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT user_id, amount, status FROM topup_requests WHERE id=?", (req_id,))
+    row = c.fetchone()
+    if not row:
+        await cb.answer("❌ Topilmadi", show_alert=True); conn.close(); return
+    uid, amount, status = row
+    if status != "pending":
+        await cb.answer("⚠️ Bu so'rov allaqachon ko'rib chiqilgan!", show_alert=True)
+        conn.close(); return
+    c.execute("UPDATE topup_requests SET status='approved' WHERE id=?", (req_id,))
+    c.execute("UPDATE users SET balance=balance+?, total_dep=total_dep+? WHERE user_id=?", (amount, amount, uid))
+    c.execute("INSERT INTO transactions(user_id,amount,type,description) VALUES(?,?,?,?)",
+              (uid, amount, "deposit", f"To'ldirish #{req_id} tasdiqlandi"))
+    conn.commit(); conn.close()
+    # Foydalanuvchiga xabar
+    try:
+        await bot.send_message(uid,
+            f"✅ Hisobingizga <b>{amount:.0f} {cur()}</b> qo'shildi!\n"
+            f"🆔 So'rov #{req_id} tasdiqlandi.",
+            parse_mode="HTML")
+    except Exception:
+        pass
+    # Admin xabarini yangilash
+    try:
+        await cb.message.edit_caption(
+            caption=(cb.message.caption or "") + f"\n\n✅ TASDIQLANDI — {cb.from_user.full_name}",
+            reply_markup=None
+        )
+    except Exception:
+        try:
+            await cb.message.edit_text(
+                (cb.message.text or "") + f"\n\n✅ TASDIQLANDI",
+                reply_markup=None
+            )
+        except Exception:
+            pass
+    await cb.answer("✅ Tasdiqlandi!")
+
+@dp.callback_query(F.data.startswith("topup_no_"))
+async def topup_no(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    req_id = int(cb.data.replace("topup_no_", ""))
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT user_id, amount, status FROM topup_requests WHERE id=?", (req_id,))
+    row = c.fetchone()
+    if not row:
+        await cb.answer("❌ Topilmadi", show_alert=True); conn.close(); return
+    uid, amount, status = row
+    if status != "pending":
+        await cb.answer("⚠️ Bu so'rov allaqachon ko'rib chiqilgan!", show_alert=True)
+        conn.close(); return
+    c.execute("UPDATE topup_requests SET status='rejected' WHERE id=?", (req_id,))
+    conn.commit(); conn.close()
+    try:
+        await bot.send_message(uid,
+            f"❌ #{req_id} so'rovingiz rad etildi.\n"
+            f"💰 Miqdor: {amount:.0f} {cur()}\n\n"
+            f"Muammo bo'lsa admin bilan bog'laning.")
+    except Exception:
+        pass
+    try:
+        await cb.message.edit_caption(
+            caption=(cb.message.caption or "") + f"\n\n❌ BEKOR QILINDI — {cb.from_user.full_name}",
+            reply_markup=None
+        )
+    except Exception:
+        try:
+            await cb.message.edit_text(
+                (cb.message.text or "") + f"\n\n❌ BEKOR QILINDI",
+                reply_markup=None
+            )
+        except Exception:
+            pass
+    await cb.answer("❌ Bekor qilindi!")
+
+@dp.callback_query(F.data.startswith("topup_msg_"))
+async def topup_msg_start(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    uid = int(cb.data.replace("topup_msg_", ""))
+    await state.update_data(topup_reply_uid=uid)
+    await state.set_state(AS.topup_reply_msg)
+    await cb.message.answer(f"💬 {uid} ga yuboriladigan xabarni kiriting:", reply_markup=cancel_kb())
+    await cb.answer()
+
+@dp.message(AS.topup_reply_msg)
+async def topup_msg_send(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
+    data = await state.get_data()
+    uid  = data.get("topup_reply_uid")
+    try:
+        await bot.send_message(uid, f"💬 Admin xabari:\n\n{msg.text}")
+        await msg.answer("✅ Xabar yuborildi!", reply_markup=admin_kb())
+    except Exception as e:
+        await msg.answer(f"❌ Xato: {e}", reply_markup=admin_kb())
+    await state.clear()
 
 # ═══════════════════════════════════════════════════════════
 #  ORQAGA
