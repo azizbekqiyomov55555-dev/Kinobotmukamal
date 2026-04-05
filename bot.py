@@ -587,11 +587,11 @@ def platforms_inline_kb():
     rows = []
     for i in range(0, len(plats), 2):
         row = []
-        row.append(InlineKeyboardButton(text=plats[i][2], callback_data=f"plat_{plats[i][1]}"))
+        row.append(InlineKeyboardButton(text=plats[i][2], callback_data=f"plat_{plats[i][1]}", style="primary"))
         if i+1 < len(plats):
-            row.append(InlineKeyboardButton(text=plats[i+1][2], callback_data=f"plat_{plats[i+1][1]}"))
+            row.append(InlineKeyboardButton(text=plats[i+1][2], callback_data=f"plat_{plats[i+1][1]}", style="primary"))
         rows.append(row)
-    rows.append([InlineKeyboardButton(text="◀️ Orqaga", callback_data="order_back_main")])
+    rows.append([InlineKeyboardButton(text="◀️ Orqaga", callback_data="order_back_main", style="danger")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 # ─────────────────────────────────────────────────────────────
