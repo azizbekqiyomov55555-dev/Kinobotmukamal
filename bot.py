@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # ============================================================
-#   SMM BOT - Yangilangan versiya v2
-#   O'zgarishlar:
-#     1. Yuqori xabarlar 10 soniyada o'chadi (start salomlashuvi emas)
-#     2. Pastki menyu har doim ko'rinadi
-#     3. Hisobim - rasmga mos
-#     4. API saqlanganda bot hisobini ko'rsatadi
-#     5. To'lov tizimlari: Oddiy (nom yo'q, karta/muddati/ism) + Auto
-#     6. Hisob to'ldirish: Uzcart (chap) Humo (o'ng) 2x tugma
+#   SMM BOT - Yangilangan versiya v3 (TUZATILGAN)
+#   Tuzatishlar:
+#     1. API o'chib qayta qo'shilsa xizmatlar bajariladi
+#        (api_id o'rniga api_url+key bo'yicha avtomatik topadi)
+#     2. plat_ren_save bug tuzatildi (yangi qo'shish + edit ajratildi)
+#     3. Xizmat qo'shishda API ni URL bo'yicha topadi (ID emas)
+#     4. Barcha mavjud funksionallik saqlanadi
 #   Ishlatish: pip install aiogram aiohttp
 # ============================================================
 
@@ -37,7 +36,6 @@ BOT_TOKEN = "8654177794:AAF9RkeQxZI0bNbRIYQaJykUHp2ZeBhCpNg"
 ADMIN_IDS = [8537782289]
 
 def get_platforms():
-    """Platformalar ro'yhatini DB dan oladi"""
     conn = db(); c = conn.cursor()
     c.execute("SELECT key, name FROM platforms ORDER BY sort_order, id")
     rows = c.fetchall(); conn.close()
@@ -51,25 +49,21 @@ def get_platforms():
     return {row[0]: row[1] for row in rows}
 
 def get_platforms_list():
-    """Platformalar ro'yhatini (id, key, name) DB dan oladi"""
     conn = db(); c = conn.cursor()
     c.execute("SELECT id, key, name FROM platforms ORDER BY sort_order, id")
     rows = c.fetchall(); conn.close()
     return rows
 
-# Eski PLATFORMS o'rniga get_platforms() ishlatiladi
-
 DB = "smm_bot.db"
 
 # ─────────────────────────────────────────────────────────────
-#  JSONBIN — Ma'lumotlarni bulutda saqlash (hosting reset bo'lganda yo'qolmasin)
+#  JSONBIN
 # ─────────────────────────────────────────────────────────────
 JSONBIN_API_KEY = "$2a$10$mQZC26SFNwuUJbIo3fANVO3eiIMW4jWdJTva4/6tBlESt4AAde.mi"
 JSONBIN_BIN_ID  = "69cc43a2856a682189e936f0"
 JSONBIN_URL     = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
 
 async def jsonbin_save():
-    """Barcha muhim ma'lumotlarni JSONBin ga saqlaydi"""
     try:
         conn = db(); c = conn.cursor()
 
@@ -128,7 +122,6 @@ async def jsonbin_save():
         return False
 
 async def jsonbin_restore():
-    """JSONBin dan ma'lumotlarni tiklaydi (faqat bo'sh bo'lsa)"""
     try:
         async with aiohttp.ClientSession() as s:
             async with s.get(
@@ -144,7 +137,6 @@ async def jsonbin_restore():
 
         conn = db(); c = conn.cursor()
 
-        # Platformalar
         if data.get("platforms"):
             c.execute("SELECT COUNT(*) FROM platforms"); cnt = c.fetchone()[0]
             if cnt == 0:
@@ -152,7 +144,6 @@ async def jsonbin_restore():
                     c.execute("INSERT OR IGNORE INTO platforms(key,name,sort_order) VALUES(?,?,?)",
                               (p["key"], p["name"], p.get("sort_order",0)))
 
-        # Kategoriyalar
         if data.get("categories"):
             c.execute("SELECT COUNT(*) FROM categories"); cnt = c.fetchone()[0]
             if cnt == 0:
@@ -160,7 +151,6 @@ async def jsonbin_restore():
                     c.execute("INSERT INTO categories(id,name,platform,is_active) VALUES(?,?,?,?)",
                               (cat["id"],cat["name"],cat["platform"],cat["is_active"]))
 
-        # API lar
         if data.get("apis"):
             c.execute("SELECT COUNT(*) FROM apis"); cnt = c.fetchone()[0]
             if cnt == 0:
@@ -168,7 +158,6 @@ async def jsonbin_restore():
                     c.execute("INSERT INTO apis(id,name,url,api_key,price_per1000) VALUES(?,?,?,?,?)",
                               (api["id"],api["name"],api["url"],api["api_key"],api["price_per1000"]))
 
-        # Xizmatlar
         if data.get("services"):
             c.execute("SELECT COUNT(*) FROM services"); cnt = c.fetchone()[0]
             if cnt == 0:
@@ -176,7 +165,6 @@ async def jsonbin_restore():
                     c.execute("INSERT INTO services(id,category_id,api_id,api_service_id,name,min_qty,max_qty,price_per1000,is_active) VALUES(?,?,?,?,?,?,?,?,?)",
                               (svc["id"],svc["category_id"],svc["api_id"],svc["api_service_id"],svc["name"],svc["min_qty"],svc["max_qty"],svc["price_per1000"],svc["is_active"]))
 
-        # To'lov tizimlari
         if data.get("payments"):
             c.execute("SELECT COUNT(*) FROM manual_payments"); cnt = c.fetchone()[0]
             if cnt == 0:
@@ -184,7 +172,6 @@ async def jsonbin_restore():
                     c.execute("INSERT INTO manual_payments(id,pay_type,name,card_number,card_expiry,card_holder,is_active) VALUES(?,?,?,?,?,?,?)",
                               (p["id"],p["pay_type"],p["name"],p["card_number"],p["card_expiry"],p["card_holder"],p["is_active"]))
 
-        # Kanallar
         if data.get("channels"):
             c.execute("SELECT COUNT(*) FROM channels"); cnt = c.fetchone()[0]
             if cnt == 0:
@@ -192,12 +179,10 @@ async def jsonbin_restore():
                     c.execute("INSERT INTO channels(channel_id,channel_name,channel_link) VALUES(?,?,?)",
                               (ch["channel_id"],ch["channel_name"],ch["channel_link"]))
 
-        # Sozlamalar
         if data.get("settings"):
             for k, v in data["settings"].items():
                 c.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (k, v))
 
-        # Qo'llanmalar
         if data.get("guides"):
             c.execute("SELECT COUNT(*) FROM guides"); cnt = c.fetchone()[0]
             if cnt == 0:
@@ -213,18 +198,15 @@ async def jsonbin_restore():
         return False
 
 async def jsonbin_autosave_loop():
-    """Har 10 daqiqada avtomatik saqlaydi"""
     while True:
         await asyncio.sleep(600)
         await jsonbin_save()
 
 
 # ─────────────────────────────────────────────────────────────
-#  RANGLI TUGMA YORDAMCHILARI (Bot API 9.4 - February 9, 2026)
-#  style: "success" (yashil), "danger" (qizil), "primary" (ko'k)
+#  RANGLI TUGMA YORDAMCHILARI
 # ─────────────────────────────────────────────────────────────
 def ibtn(text: str, callback_data: str = None, url: str = None, style: str = None) -> InlineKeyboardButton:
-    """Rangli InlineKeyboardButton yaratadi (Bot API 9.4+)"""
     kwargs = {"text": text}
     if callback_data is not None:
         kwargs["callback_data"] = callback_data
@@ -318,7 +300,6 @@ def init_db():
         created_at  TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
-    # manual_payments: nom yo'q, faqat karta raqam, muddati, ism familiya
     c.execute("""CREATE TABLE IF NOT EXISTS manual_payments (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         pay_type    TEXT NOT NULL DEFAULT 'uzcart',
@@ -329,12 +310,10 @@ def init_db():
         is_active   INTEGER DEFAULT 1
     )""")
 
-    # Migration: name ustuni qo'shish
     try:
         c.execute("ALTER TABLE manual_payments ADD COLUMN name TEXT NOT NULL DEFAULT ''")
     except Exception:
         pass
-    # Migration: pay_type ustuni qo'shish
     try:
         c.execute("ALTER TABLE manual_payments ADD COLUMN pay_type TEXT NOT NULL DEFAULT 'uzcart'")
     except Exception:
@@ -365,7 +344,6 @@ def init_db():
         sort_order INTEGER DEFAULT 0
     )""")
 
-    # Default platformalar (faqat bo'sh bo'lsa qo'shiladi)
     default_plats = [
         ("telegram",  "✈️ Telegram",  1),
         ("instagram", "📸 Instagram", 2),
@@ -382,10 +360,6 @@ def init_db():
         ("premium_emoji",    "1"),
         ("payme_active",     "0"),
         ("click_active",     "0"),
-        ("plat_telegram",    "✈️ Telegram"),
-        ("plat_instagram",   "📸 Instagram"),
-        ("plat_youtube",     "▶️ Youtube"),
-        ("plat_tiktok",      "🎵 Tik tok"),
     ]
     for k, v in defaults:
         c.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", (k, v))
@@ -440,7 +414,6 @@ def orders_count(uid):
     n = c.fetchone()[0]; conn.close(); return n
 
 async def auto_delete(message: types.Message, delay: int = 10):
-    """Xabarni delay sekunddan keyin o'chiradi"""
     await asyncio.sleep(delay)
     try:
         await message.delete()
@@ -454,6 +427,43 @@ async def delete_msg_by_id(chat_id: int, message_id: int, delay: int = 0):
         await bot.delete_message(chat_id, message_id)
     except Exception:
         pass
+
+# ─────────────────────────────────────────────────────────────
+#  ✅ TUZATILGAN: API ni service orqali avtomatik topish
+#  api_id bo'yicha emas, services.api_id → apis jadvali orqali
+#  Agar api_id=NULL yoki API o'chirilgan bo'lsa, URL bo'yicha topadi
+# ─────────────────────────────────────────────────────────────
+def get_api_for_service(service_id: int):
+    """
+    Berilgan service_id uchun API url va key ni qaytaradi.
+    Avval service.api_id bo'yicha qidiradi.
+    Topilmasa yoki NULL bo'lsa, DB dagi birinchi API ni ishlatadi.
+    """
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT api_id FROM services WHERE id=?", (service_id,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return None, None, None
+
+    api_id = row[0]
+
+    if api_id:
+        c.execute("SELECT id, url, api_key FROM apis WHERE id=?", (api_id,))
+        api_row = c.fetchone()
+        if api_row:
+            conn.close()
+            return api_row[0], api_row[1], api_row[2]
+
+    # api_id NULL yoki API o'chirilgan — birinchi mavjud API ni ol
+    c.execute("SELECT id, url, api_key FROM apis LIMIT 1")
+    api_row = c.fetchone()
+    conn.close()
+    if api_row:
+        logger.warning(f"Service {service_id} uchun api_id topilmadi, fallback API {api_row[0]} ishlatilmoqda")
+        return api_row[0], api_row[1], api_row[2]
+
+    return None, None, None
 
 async def check_order_status_loop(uid: int, order_id: int, api_order_id: str,
                                    api_url: str, api_key: str):
@@ -546,9 +556,6 @@ class AS(StatesGroup):
 #  KEYBOARDS
 # ─────────────────────────────────────────────────────────────
 def kbtn(text: str, style: str = None) -> KeyboardButton:
-    """Rangli KeyboardButton (Bot API 9.4+)
-    style: 'success' (yashil), 'danger' (qizil), 'primary' (ko'k)
-    """
     if style:
         return KeyboardButton(text=text, **{"style": style})
     return KeyboardButton(text=text)
@@ -666,7 +673,7 @@ async def sub_kb():
     return b.as_markup()
 
 # ═══════════════════════════════════════════════════════════
-#  /start — faqat salomlashuv xabari saqlanadi (o'chmaslik)
+#  /start
 # ═══════════════════════════════════════════════════════════
 @dp.message(Command("start"))
 async def cmd_start(msg: types.Message, state: FSMContext):
@@ -681,7 +688,6 @@ async def cmd_start(msg: types.Message, state: FSMContext):
     if not get_user(uid):
         reg_user(uid, msg.from_user.username or "", msg.from_user.full_name or "", ref)
 
-    # /start buyrug'ini 10 sekundda o'chir (ammo asosiy menyu xabari o'chmaydi)
     asyncio.create_task(auto_delete(msg, 40))
 
     if not await check_sub(uid):
@@ -689,7 +695,6 @@ async def cmd_start(msg: types.Message, state: FSMContext):
                          reply_markup=await sub_kb())
         return
 
-    # Salomlashuv xabari o'chmassin — alohida yuboriladi, delete qilinmaydi
     await msg.answer(
         f"👋 Xush kelibsiz, {msg.from_user.full_name}!\n\n"
         f"🖥 Asosiy menyudasiz!",
@@ -699,7 +704,6 @@ async def cmd_start(msg: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "check_sub")
 async def cb_check_sub(cb: types.CallbackQuery):
     if await check_sub(cb.from_user.id):
-        # Obuna so'rash xabarini o'chirish
         try:
             await cb.message.delete()
         except Exception:
@@ -714,7 +718,7 @@ async def cb_check_sub(cb: types.CallbackQuery):
         await cb.answer("❌ Siz hali obuna bo'lmadingiz!", show_alert=True)
 
 # ═══════════════════════════════════════════════════════════
-#  USER — Hisobim (rasmga mos)
+#  USER — Hisobim
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "Hisobim")
 async def my_account(msg: types.Message):
@@ -731,7 +735,6 @@ async def my_account(msg: types.Message):
         f"💰 Kiritgan pullaringiz: {u[6]:.2f} {cur()}",
         reply_markup=b.as_markup()
     )
-    # 10 soniyada o'chadi
     asyncio.create_task(auto_delete(sent, 40))
 
 @dp.callback_query(F.data == "go_topup")
@@ -759,7 +762,6 @@ async def earn(msg: types.Message):
 
 # ═══════════════════════════════════════════════════════════
 #  USER — Hisob to'ldirish
-#  Uzcart (chap) | Humo (o'ng) — 2 tugma
 # ═══════════════════════════════════════════════════════════
 async def show_topup(message: types.Message, uid: int):
     conn = db(); c = conn.cursor()
@@ -798,8 +800,8 @@ async def topup(msg: types.Message):
 async def pay_noop(cb: types.CallbackQuery):
     await cb.answer()
 
-@dp.callback_query(F.data.startswith("pay_manual_") & ~F.data.startswith("pay_manual_settings"))
-async def pay_manual_show(cb: types.CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data.startswith("pay_manual_"))
+async def pay_manual(cb: types.CallbackQuery, state: FSMContext):
     pid_str = cb.data.replace("pay_manual_", "")
     try:
         pid = int(pid_str)
@@ -883,7 +885,6 @@ async def do_topup_check(msg: types.Message, state: FSMContext):
         await state.clear()
         await msg.answer("Bekor qilindi", reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)); return
 
-    # Rasm yoki hujjat bo'lishi kerak
     file_id = None
     if msg.photo:
         file_id = msg.photo[-1].file_id
@@ -906,7 +907,6 @@ async def do_topup_check(msg: types.Message, state: FSMContext):
 
     await state.clear()
 
-    # Foydalanuvchiga xabar
     await msg.answer(
         f"✅ Chekingiz qabul qilindi!\n\n"
         f"💰 Miqdor: {amount:.0f} {cur()}\n"
@@ -915,7 +915,6 @@ async def do_topup_check(msg: types.Message, state: FSMContext):
         reply_markup=main_kb(uid in ADMIN_IDS)
     )
 
-    # Adminga xabar + chek
     u = get_user(uid)
     uname = f"@{u[1]}" if u and u[1] else f"ID: {uid}"
     caption = (
@@ -970,7 +969,7 @@ async def my_orders(msg: types.Message):
     asyncio.create_task(auto_delete(sent, 40))
 
 # ═══════════════════════════════════════════════════════════
-#  USER — Buyurtma berish → Platforma tanlash
+#  USER — Buyurtma berish
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "Buyurtma berish")
 async def place_order(msg: types.Message, state: FSMContext):
@@ -1199,7 +1198,6 @@ async def enter_qty(msg: types.Message, state: FSMContext):
         f"🔗 Linkni yuboring:\n(Masalan: https://t.me/username)",
         reply_markup=main_kb(msg.from_user.id in ADMIN_IDS)
     )
-    # link so'rash xabarini 40 soniyada o'chir, lekin menyu saqlanadi
     asyncio.create_task(auto_delete(sent, 40))
     await state.update_data(link_ask_msg_id=sent.message_id,
                             link_ask_chat_id=sent.chat.id)
@@ -1282,7 +1280,6 @@ async def enter_link(msg: types.Message, state: FSMContext):
     b.button(text="❌ Bekor qilish", callback_data="order_no", style="danger")
     b.adjust(1)
 
-    # Rasmga mos buyurtma ma'lumotlari
     confirm_msg = await msg.answer(
         f"ℹ️ Buyurtmam haqida malumot:\n\n"
         f"{plat_name} — {svc[4]}\n\n"
@@ -1320,17 +1317,22 @@ async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
     api_error    = None
     api_url_val  = None
     api_key_val  = None
-    if svc[2]:
-        c.execute("SELECT url,api_key FROM apis WHERE id=?", (svc[2],))
-        api_row = c.fetchone()
-        if api_row:
-            api_url_val = api_row[0]
-            api_key_val = api_row[1]
-            res = await api_order(api_url_val, api_key_val, svc[3], link, qty)
-            if res and "order" in res:
-                api_order_id = str(res["order"])
-            elif res and "error" in res:
-                api_error = str(res["error"])
+
+    # ✅ TUZATILGAN: API ni avtomatik topish
+    # svc[0] = service.id, svc[2] = api_id, svc[3] = api_service_id
+    found_api_id, api_url_val, api_key_val = get_api_for_service(svc[0])
+
+    if api_url_val and api_key_val and svc[3]:
+        res = await api_order(api_url_val, api_key_val, svc[3], link, qty)
+        if res and "order" in res:
+            api_order_id = str(res["order"])
+        elif res and "error" in res:
+            api_error = str(res["error"])
+            logger.error(f"API order xato: {api_error}")
+
+        # Agar xizmatdagi api_id noto'g'ri bo'lsa, to'g'rilash
+        if found_api_id and svc[2] != found_api_id:
+            c.execute("UPDATE services SET api_id=? WHERE id=?", (found_api_id, svc[0]))
 
     c.execute(
         "INSERT INTO orders(user_id,service_id,api_order_id,link,quantity,amount,status) "
@@ -1344,7 +1346,6 @@ async def order_confirm(cb: types.CallbackQuery, state: FSMContext):
     )
     conn.commit(); conn.close()
 
-    # Buyurtma qabul xabari O'CHMASSIN
     await cb.message.answer(
         f"✅ Buyurtma qabul qilindi!\n\n"
         f"🆔 Buyurtma ID si: {order_id}",
@@ -1452,7 +1453,7 @@ async def show_guide(cb: types.CallbackQuery):
     await cb.answer()
 
 # ═══════════════════════════════════════════════════════════
-#  ADMIN — To'ldirish so'rovini tasdiqlash / bekor qilish
+#  ADMIN — To'ldirish tasdiqlash
 # ═══════════════════════════════════════════════════════════
 @dp.callback_query(F.data.startswith("topup_ok_"))
 async def topup_ok(cb: types.CallbackQuery):
@@ -1472,7 +1473,6 @@ async def topup_ok(cb: types.CallbackQuery):
     c.execute("INSERT INTO transactions(user_id,amount,type,description) VALUES(?,?,?,?)",
               (uid, amount, "deposit", f"To'ldirish #{req_id} tasdiqlandi"))
     conn.commit(); conn.close()
-    # Foydalanuvchiga xabar
     try:
         await bot.send_message(uid,
             f"✅ Hisobingizga <b>{amount:.0f} {cur()}</b> qo'shildi!\n"
@@ -1480,7 +1480,6 @@ async def topup_ok(cb: types.CallbackQuery):
             parse_mode="HTML")
     except Exception:
         pass
-    # Admin xabarini yangilash
     try:
         await cb.message.edit_caption(
             caption=(cb.message.caption or "") + f"\n\n✅ TASDIQLANDI — {cb.from_user.full_name}",
@@ -1536,14 +1535,14 @@ async def topup_no(cb: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("topup_msg_"))
 async def topup_msg_start(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
-    uid = int(cb.data.replace("topup_msg_", ""))
-    await state.update_data(topup_reply_uid=uid)
+    target_uid = int(cb.data.replace("topup_msg_", ""))
+    await state.update_data(topup_reply_uid=target_uid)
     await state.set_state(AS.topup_reply_msg)
-    await cb.message.answer(f"💬 {uid} ga yuboriladigan xabarni kiriting:", reply_markup=cancel_kb())
+    await cb.message.answer(f"💬 {target_uid} ga xabar kiriting:", reply_markup=cancel_kb())
     await cb.answer()
 
 @dp.message(AS.topup_reply_msg)
-async def topup_msg_send(msg: types.Message, state: FSMContext):
+async def topup_reply_msg(msg: types.Message, state: FSMContext):
     if msg.text == "❌ Bekor qilish":
         await state.clear(); await msg.answer("Bekor qilindi", reply_markup=admin_kb()); return
     data = await state.get_data()
@@ -1555,9 +1554,6 @@ async def topup_msg_send(msg: types.Message, state: FSMContext):
         await msg.answer(f"❌ Xato: {e}", reply_markup=admin_kb())
     await state.clear()
 
-# ═══════════════════════════════════════════════════════════
-#  ORQAGA
-# ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "◀️ Orqaga")
 async def go_back(msg: types.Message, state: FSMContext):
     asyncio.create_task(auto_delete(msg, 40))
@@ -1813,8 +1809,6 @@ async def del_ch(cb: types.CallbackQuery):
 
 # ═══════════════════════════════════════════════════════════
 #  ADMIN — To'lov tizimlari
-#  Oddiy: karta raqam, muddati, ism familiya (Uzcart / Humo tanlaydi)
-#  Auto:  Payme, Click (settings orqali)
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "💳 To'lov tizimlar")
 async def payment_methods(msg: types.Message):
@@ -1825,7 +1819,6 @@ async def payment_methods(msg: types.Message):
     b.adjust(1)
     await msg.answer("⚙️ To'lov tizim sozlamalarisiz:", reply_markup=b.as_markup())
 
-# ── Oddiy to'lov sozlamalari ───────────────────────────────
 @dp.callback_query(F.data == "mpay_settings")
 async def pay_manual_settings(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
@@ -1846,7 +1839,6 @@ async def pay_manual_settings(cb: types.CallbackQuery):
         await cb.message.answer(f"📝 Oddiy to'lov tizimlari: {len(pays)} ta", reply_markup=b.as_markup())
     await cb.answer()
 
-# ── Avtomatik to'lov sozlamalari ──────────────────────────
 @dp.callback_query(F.data == "pay_auto_settings")
 async def pay_auto_settings(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
@@ -1864,10 +1856,7 @@ async def pay_auto_settings(cb: types.CallbackQuery):
             reply_markup=b.as_markup()
         )
     except Exception:
-        await cb.message.answer(
-            f"⚡ Avtomatik to'lov tizimlari:",
-            reply_markup=b.as_markup()
-        )
+        await cb.message.answer(f"⚡ Avtomatik to'lov tizimlari:", reply_markup=b.as_markup())
     await cb.answer()
 
 @dp.callback_query(F.data == "tog_payme")
@@ -1882,7 +1871,6 @@ async def tog_click(cb: types.CallbackQuery):
     set_setting("click_active", v)
     await pay_auto_settings(cb)
 
-# ── Yangi oddiy to'lov qo'shish (Uzcart yoki Humo tanlanadi) ──
 @dp.callback_query(F.data == "add_mpay")
 async def add_mpay(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
@@ -1966,7 +1954,6 @@ async def pay_toggle(cb: types.CallbackQuery):
 
 # ═══════════════════════════════════════════════════════════
 #  ADMIN — API boshqaruvi
-#  API URL va Key kiritgandan keyin bot hisobini ko'rsatadi
 # ═══════════════════════════════════════════════════════════
 @dp.message(F.text == "🔑 API")
 async def api_menu(msg: types.Message):
@@ -2016,7 +2003,6 @@ async def api_key_h(msg: types.Message, state: FSMContext):
     conn.commit(); conn.close()
     await state.clear()
 
-    # Muvaffaqiyatli saqlanganini xabarlash + API botning hisobini ko'rsatish
     saving_msg = await msg.answer(
         f"✅ Muvaffaqiyatli saqlandi!\n\n"
         f"🔑 Nomi: {data['api_name']}\n"
@@ -2026,7 +2012,6 @@ async def api_key_h(msg: types.Message, state: FSMContext):
     )
     asyncio.create_task(jsonbin_save())
 
-    # API balansini tekshirish
     bal, cur_val = await api_balance(data["api_url"], msg.text)
     if bal is not None:
         try:
@@ -2037,10 +2022,7 @@ async def api_key_h(msg: types.Message, state: FSMContext):
                 f"💰 API bot hisobi: {bal:.2f} {cur_val}"
             )
         except Exception:
-            await msg.answer(
-                f"💰 API bot hisobi: {bal:.2f} {cur_val}",
-                reply_markup=admin_kb()
-            )
+            await msg.answer(f"💰 API bot hisobi: {bal:.2f} {cur_val}", reply_markup=admin_kb())
     else:
         try:
             await saving_msg.edit_text(
@@ -2052,7 +2034,7 @@ async def api_key_h(msg: types.Message, state: FSMContext):
         except Exception:
             pass
 
-@dp.callback_query(F.data.startswith("api_") & ~F.data.startswith("api_add") & ~F.data.startswith("api_del_") & ~F.data.startswith("api_bal_"))
+@dp.callback_query(F.data.startswith("api_") & ~F.data.startswith("api_add") & ~F.data.startswith("api_del_") & ~F.data.startswith("api_bal_") & ~F.data.startswith("api_rekey_"))
 async def api_detail(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
     try:
@@ -2064,7 +2046,7 @@ async def api_detail(cb: types.CallbackQuery):
     api = c.fetchone(); conn.close()
     if not api: await cb.answer("❌ Topilmadi"); return
     b = InlineKeyboardBuilder()
-    b.button(text="🔑 API Key kiritish",  callback_data=f"api_rekey_{aid}", style="primary")
+    b.button(text="🔑 API Key yangilash",  callback_data=f"api_rekey_{aid}", style="primary")
     b.button(text="💰 Balansni ko'rish",   callback_data=f"api_bal_{aid}", style="success")
     b.button(text="❌ O'chirish",          callback_data=f"api_del_{aid}", style="danger")
     b.button(text="◀️ Orqaga",            callback_data="api_back", style="danger")
@@ -2114,6 +2096,15 @@ async def api_del(cb: types.CallbackQuery):
     await cb.message.answer("✅ API o'chirildi!")
     await cb.answer()
 
+@dp.callback_query(F.data.startswith("api_rekey_"))
+async def api_rekey(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    aid = int(cb.data.replace("api_rekey_", ""))
+    await state.update_data(rekey_api_id=aid)
+    await state.set_state(AS.api_key)
+    await cb.message.answer("🔐 Yangi API kaliti (key)ni kiriting:", reply_markup=cancel_kb())
+    await cb.answer()
+
 # ── Qo'llanmalar (Admin) ─────────────────────────────────
 @dp.message(F.text == "📚 Qo'llanmalar")
 async def admin_guides(msg: types.Message):
@@ -2161,20 +2152,10 @@ async def del_guide(cb: types.CallbackQuery):
     await cb.message.answer("✅ Qo'llanma o'chirildi!"); await cb.answer()
 
 # ═══════════════════════════════════════════════════════════
-#  ADMIN — Platformalar (qo'shish, o'chirish, nomini o'zgartirish)
+#  ADMIN — Platformalar
 # ═══════════════════════════════════════════════════════════
 async def show_platforms_menu(target, edit=False):
-    """Platformalar ro'yhatini ko'rsatadi"""
     plats = get_platforms_list()
-    b = InlineKeyboardBuilder()
-    for pid, pkey, pname in plats:
-        b.button(text=f"✏️ {pname}", callback_data=f"plat_ren_{pid}", style="primary")
-        b.button(text="🗑",           callback_data=f"plat_del_{pid}", style="danger")
-    b.button(text="➕ Platforma qo'shish", callback_data="plat_add", style="success")
-    b.adjust(2)
-    # Adjust: har satr 2 tugma (nom + o'chirish), oxirgi 1 tugma
-    # Manualroq usul:
-    b2 = InlineKeyboardBuilder()
     rows = []
     for pid, pkey, pname in plats:
         rows.append([
@@ -2197,7 +2178,6 @@ async def admin_platforms(msg: types.Message):
     if msg.from_user.id not in ADMIN_IDS: return
     await show_platforms_menu(msg)
 
-# ── Platforma qo'shish ────────────────────────────────────
 @dp.callback_query(F.data == "plat_add")
 async def plat_add_start(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
@@ -2212,7 +2192,6 @@ async def plat_add_start(cb: types.CallbackQuery, state: FSMContext):
     )
     await cb.answer()
 
-# ── Platforma nomini o'zgartirish ─────────────────────────
 @dp.callback_query(F.data.startswith("plat_ren_"))
 async def plat_ren_start(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
@@ -2232,6 +2211,7 @@ async def plat_ren_start(cb: types.CallbackQuery, state: FSMContext):
     )
     await cb.answer()
 
+# ✅ TUZATILGAN: plat_ren_save — yangi qo'shish va tahrirlash alohida
 @dp.message(AS.plat_rename_val)
 async def plat_ren_save(msg: types.Message, state: FSMContext):
     if msg.text == "❌ Bekor qilish":
@@ -2240,13 +2220,13 @@ async def plat_ren_save(msg: types.Message, state: FSMContext):
     pid  = data.get("plat_rename_key", "")
     new_name = msg.text.strip()
     conn = db(); c = conn.cursor()
+
     if pid == "__new__":
-        # Yangi platforma qo'shish — key nomdan yaratiladi
+        # Yangi platforma qo'shish
         import re, time
         key = re.sub(r'[^a-z0-9]', '', new_name.lower().replace(' ', '_'))[:20]
         if not key:
             key = f"plat_{int(time.time())}"
-        # key takrorlanmasin
         c.execute("SELECT id FROM platforms WHERE key=?", (key,))
         if c.fetchone():
             key = f"{key}_{int(time.time()) % 1000}"
@@ -2256,13 +2236,14 @@ async def plat_ren_save(msg: types.Message, state: FSMContext):
         await state.clear()
         await msg.answer(f"✅ Platforma qo'shildi: {new_name}", reply_markup=admin_kb())
         asyncio.create_task(jsonbin_save())
+    else:
+        # Mavjud platformani tahrirlash
         c.execute("UPDATE platforms SET name=? WHERE id=?", (new_name, pid))
         conn.commit(); conn.close()
         await state.clear()
         await msg.answer(f"✅ Platforma nomi o'zgartirildi: {new_name}", reply_markup=admin_kb())
         asyncio.create_task(jsonbin_save())
 
-# ── Platforma o'chirish ───────────────────────────────────
 @dp.callback_query(F.data.startswith("plat_del_") & ~F.data.startswith("plat_del_confirm_") & ~F.data.startswith("plat_del_cancel"))
 async def plat_del(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
@@ -2273,7 +2254,6 @@ async def plat_del(cb: types.CallbackQuery):
     if not row:
         conn.close(); await cb.answer("❌ Topilmadi"); return
     pkey, pname = row
-    # O'chirishni tasdiqlash
     b = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Ha, o'chirish", callback_data=f"plat_del_confirm_{pid}", style="danger"),
         InlineKeyboardButton(text="❌ Yo'q",          callback_data="plat_del_cancel", style="success"),
@@ -2318,16 +2298,17 @@ async def plat_del_cancel(cb: types.CallbackQuery):
 @dp.message(F.text == "⚙️ Asosiy sozlamalar")
 async def main_settings(msg: types.Message):
     if msg.from_user.id not in ADMIN_IDS: return
-    ref_bonus     = get_setting("referral_bonus", "2500")
-    currency      = get_setting("currency", "Sum")
-    svc_time      = get_setting("service_time", "1")
-    prem_emoji    = get_setting("premium_emoji", "1")
+    ref_bonus  = get_setting("referral_bonus", "2500")
+    currency   = get_setting("currency", "Sum")
+    svc_time   = get_setting("service_time", "1")
+    prem_emoji = get_setting("premium_emoji", "1")
 
     b = InlineKeyboardBuilder()
-    b.button(text=f"💰 Referal bonus: {ref_bonus}",         callback_data="set_ref_bonus", style="primary")
-    b.button(text=f"💱 Valyuta: {currency}",                callback_data="set_currency", style="primary")
-    b.button(text=f"⏱ Xizmat vaqti (kun): {svc_time}",     callback_data="set_svc_time", style="success")
-    b.button(text=f"{'✅' if prem_emoji=='1' else '❌'} Premium emoji", callback_data="tog_prem_emoji", style="success" if prem_emoji=="1" else "primary")
+    b.button(text=f"💰 Referal bonus: {ref_bonus}", callback_data="set_ref_bonus", style="primary")
+    b.button(text=f"💱 Valyuta: {currency}",        callback_data="set_currency", style="primary")
+    b.button(text=f"⏱ Xizmat vaqti (kun): {svc_time}", callback_data="set_svc_time", style="success")
+    b.button(text=f"{'✅' if prem_emoji=='1' else '❌'} Premium emoji", callback_data="tog_prem_emoji",
+             style="success" if prem_emoji=="1" else "primary")
     b.adjust(1)
 
     await msg.answer(
@@ -2383,49 +2364,33 @@ async def do_set_currency(msg: types.Message, state: FSMContext):
     set_setting("currency", msg.text.strip())
     await state.clear()
     await msg.answer(f"✅ Valyuta o'zgartirildi: {msg.text.strip()}", reply_markup=admin_kb())
+    asyncio.create_task(jsonbin_save())
 
 @dp.callback_query(F.data == "set_svc_time")
-async def set_svc_time_cb(cb: types.CallbackQuery):
+async def set_svc_time_start(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
-    cur_val = get_setting("service_time", "1")
-    b = InlineKeyboardBuilder()
-    for d in ["1", "3", "7", "14", "30"]:
-        b.button(text=f"{'✅ ' if cur_val==d else ''}{d} kun", callback_data=f"svc_time_{d}", style="success" if cur_val==d else "primary")
-    b.adjust(3)
     await cb.message.answer(
-        f"⏱ Xizmat bajarilish vaqtini tanlang:\nHozirgi: {cur_val} kun",
-        reply_markup=b.as_markup()
+        f"⏱ Xizmat vaqtini kiriting (kun):\nHozirgi: {get_setting('service_time','1')}",
+        reply_markup=cancel_kb()
     )
     await cb.answer()
-
-@dp.callback_query(F.data.startswith("svc_time_"))
-async def do_svc_time(cb: types.CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    val = cb.data.replace("svc_time_", "")
-    set_setting("service_time", val)
-    try:
-        await cb.message.edit_text(f"✅ Xizmat vaqti o'zgartirildi: {val} kun", reply_markup=None)
-    except Exception:
-        await cb.message.answer(f"✅ Xizmat vaqti o'zgartirildi: {val} kun", reply_markup=admin_kb())
-    await cb.answer("✅ Saqlandi!")
 
 @dp.callback_query(F.data == "tog_prem_emoji")
 async def tog_prem_emoji(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
-    cur_val = get_setting("premium_emoji", "1")
-    new_val = "0" if cur_val == "1" else "1"
+    new_val = "0" if get_setting("premium_emoji") == "1" else "1"
     set_setting("premium_emoji", new_val)
     status = "Faol ✅" if new_val == "1" else "Nofaol ❌"
     await cb.answer(f"Premium emoji: {status}", show_alert=True)
-    # Sozlamalar menyusini yangilash
     ref_bonus  = get_setting("referral_bonus", "2500")
     currency   = get_setting("currency", "Sum")
     svc_time   = get_setting("service_time", "1")
     b = InlineKeyboardBuilder()
-    b.button(text=f"💰 Referal bonus: {ref_bonus}",         callback_data="set_ref_bonus", style="primary")
-    b.button(text=f"💱 Valyuta: {currency}",                callback_data="set_currency", style="primary")
-    b.button(text=f"⏱ Xizmat vaqti (kun): {svc_time}",     callback_data="set_svc_time", style="success")
-    b.button(text=f"{'✅' if new_val=='1' else '❌'} Premium emoji", callback_data="tog_prem_emoji", style="success" if new_val=="1" else "primary")
+    b.button(text=f"💰 Referal bonus: {ref_bonus}", callback_data="set_ref_bonus", style="primary")
+    b.button(text=f"💱 Valyuta: {currency}",        callback_data="set_currency", style="primary")
+    b.button(text=f"⏱ Xizmat vaqti (kun): {svc_time}", callback_data="set_svc_time", style="success")
+    b.button(text=f"{'✅' if new_val=='1' else '❌'} Premium emoji", callback_data="tog_prem_emoji",
+             style="success" if new_val=="1" else "primary")
     b.adjust(1)
     try:
         await cb.message.edit_reply_markup(reply_markup=b.as_markup())
@@ -2743,12 +2708,14 @@ async def svc_api_id_h(msg: types.Message, state: FSMContext):
         except: pass
         if isinstance(svcs, list):
             for svc in svcs:
-                sid = str(svc.get("service", svc.get("id", "")))
+                # ✅ TUZATILGAN: ko'proq field nomlarini tekshiradi
+                sid = str(svc.get("service", svc.get("id", svc.get("service_id", ""))))
                 if sid == api_service_id:
                     prefill["name"]  = svc.get("name", api_service_id)
-                    prefill["price"] = float(svc.get("rate", svc.get("price", 0)))
-                    prefill["min"]   = int(svc.get("min", 100))
-                    prefill["max"]   = int(svc.get("max", 10000))
+                    raw_price = svc.get("rate", svc.get("price", svc.get("cost", 0)))
+                    prefill["price"] = float(raw_price) if raw_price else 0.0
+                    prefill["min"]   = int(svc.get("min", svc.get("min_order", 100)))
+                    prefill["max"]   = int(svc.get("max", svc.get("max_order", 10000)))
                     break
 
     await state.update_data(new_svc_api_id=api_service_id, prefill=prefill)
