@@ -545,33 +545,34 @@ class AS(StatesGroup):
 # ─────────────────────────────────────────────────────────────
 #  KEYBOARDS
 # ─────────────────────────────────────────────────────────────
-def kbtn(text: str, style: str = None) -> dict:
-    """Rangli KeyboardButton dict (Bot API 9.4+)"""
-    btn = {"text": text}
+def kbtn(text: str, style: str = None) -> KeyboardButton:
+    """Rangli KeyboardButton (Bot API 9.4+)
+    style: 'success' (yashil), 'danger' (qizil), 'primary' (ko'k)
+    """
     if style:
-        btn["style"] = style
-    return btn
+        return KeyboardButton(text=text, **{"style": style})
+    return KeyboardButton(text=text)
 
 def main_kb(is_admin=False):
     rows = [
-        [kbtn("Buyurtma berish", "primary")],
-        [kbtn("Buyurtmalar"), kbtn("Hisobim", "primary")],
-        [kbtn("Pul ishlash", "success"), kbtn("Hisob to'ldirish", "success")],
-        [kbtn("Murojaat"), kbtn("Qo'llanma")],
+        [kbtn("Buyurtma berish", "success")],
+        [kbtn("Buyurtmalar", "primary"), kbtn("Hisobim", "primary")],
+        [kbtn("Pul ishlash", "success"), kbtn("Hisob to'ldirish", "danger")],
+        [kbtn("Murojaat", "primary"), kbtn("Qo'llanma", "success")],
     ]
     if is_admin:
-        rows.append([kbtn("🗄 Boshqaruv", "primary")])
+        rows.append([kbtn("🗄 Boshqaruv", "danger")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 def admin_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [kbtn("⚙️ Asosiy sozlamalar", "primary")],
-        [kbtn("📊 Statistika"), kbtn("📨 Xabar yuborish", "primary")],
-        [kbtn("🔒 Majbur obuna kanallar")],
+        [kbtn("📊 Statistika", "success"), kbtn("📨 Xabar yuborish", "primary")],
+        [kbtn("🔒 Majbur obuna kanallar", "danger")],
         [kbtn("💳 To'lov tizimlar", "success"), kbtn("🔑 API", "primary")],
-        [kbtn("👩‍💻 Foydalanuvchini boshqarish")],
-        [kbtn("📚 Qo'llanmalar"), kbtn("📈 Buyurtmalar")],
-        [kbtn("📁 Xizmatlar", "primary")],
+        [kbtn("👩‍💻 Foydalanuvchini boshqarish", "primary")],
+        [kbtn("📚 Qo'llanmalar", "success"), kbtn("📈 Buyurtmalar", "primary")],
+        [kbtn("📁 Xizmatlar", "success")],
         [kbtn("◀️ Orqaga", "danger")],
     ], resize_keyboard=True)
 
@@ -659,7 +660,7 @@ async def sub_kb():
     chs = c.fetchall(); conn.close()
     b = InlineKeyboardBuilder()
     for cid, cname, clink in chs:
-        b.button(text=f"📢 {cname}", url=clink)
+        b.button(text=f"📢 {cname}", url=clink, style="primary")
     b.button(text="✅ Tekshirish", callback_data="check_sub", style="success")
     b.adjust(1)
     return b.as_markup()
@@ -767,13 +768,13 @@ async def show_topup(message: types.Message, uid: int):
 
     rows = []
     if get_setting("payme_active") == "1" or get_setting("click_active") == "1":
-        rows.append([InlineKeyboardButton(text="💠 Avto-to'lov (Payme, Click)", callback_data="pay_auto")])
+        rows.append([InlineKeyboardButton(text="💠 Avto-to'lov (Payme, Click)", callback_data="pay_auto", style="primary")])
 
     pair = []
     for pid, ptype, pname in mpays:
         icon = "💳" if ptype == "uzcart" else "🟠"
         disp = pname if pname else ("Uzcart" if ptype == "uzcart" else "Humo")
-        pair.append(InlineKeyboardButton(text=f"{icon} {disp}", callback_data=f"pay_manual_{pid}"))
+        pair.append(InlineKeyboardButton(text=f"{icon} {disp}", callback_data=f"pay_manual_{pid}", style="success"))
         if len(pair) == 2:
             rows.append(pair); pair = []
     if pair:
@@ -1007,8 +1008,8 @@ async def platform_selected(cb: types.CallbackQuery, state: FSMContext):
 
     b = InlineKeyboardBuilder()
     for cid, cname in cats:
-        b.button(text=cname, callback_data=f"order_cat_{cid}")
-    b.button(text="◀️ Orqaga", callback_data="back_to_platforms")
+        b.button(text=cname, callback_data=f"order_cat_{cid}", style="primary")
+    b.button(text="◀️ Orqaga", callback_data="back_to_platforms", style="danger")
     b.adjust(1)
 
     await state.update_data(platform=platform, plat_name=plat_name)
@@ -1064,8 +1065,8 @@ async def order_cat_selected(cb: types.CallbackQuery, state: FSMContext):
 
     b = InlineKeyboardBuilder()
     for sid, sname, price, mn, mx in svcs:
-        b.button(text=f"{sname} - {price:.2f} {cur()}", callback_data=f"sel_svc_{sid}")
-    b.button(text="◀️ Orqaga", callback_data=f"plat_{platform}")
+        b.button(text=f"{sname} - {price:.2f} {cur()}", callback_data=f"sel_svc_{sid}", style="primary")
+    b.button(text="◀️ Orqaga", callback_data=f"plat_{platform}", style="danger")
     b.adjust(1)
 
     await state.update_data(
@@ -1108,7 +1109,7 @@ async def sel_svc(cb: types.CallbackQuery, state: FSMContext):
 
     b = InlineKeyboardBuilder()
     b.button(text="✅ Buyurtma berish", callback_data=f"start_order_{svc_id}", style="success")
-    b.button(text="◀️ Orqaga",          callback_data=f"order_cat_{svc[1]}")
+    b.button(text="◀️ Orqaga",          callback_data=f"order_cat_{svc[1]}", style="danger")
     b.adjust(1)
 
     text = (
@@ -1134,7 +1135,7 @@ async def start_order(cb: types.CallbackQuery, state: FSMContext):
     await state.set_state(US.enter_quantity)
 
     b = InlineKeyboardBuilder()
-    b.button(text="◀️ Orqaga", callback_data=f"sel_svc_{svc[0]}")
+    b.button(text="◀️ Orqaga", callback_data=f"sel_svc_{svc[0]}", style="danger")
 
     text = (
         f"{plat_name} — {svc[4]}\n\n"
@@ -1217,7 +1218,7 @@ async def enter_link(msg: types.Message, state: FSMContext):
         if svc:
             plat_name = data.get("plat_name", "")
             b = InlineKeyboardBuilder()
-            b.button(text="◀️ Orqaga", callback_data=f"sel_svc_{svc[0]}")
+            b.button(text="◀️ Orqaga", callback_data=f"sel_svc_{svc[0]}", style="danger")
             sent = await msg.answer(
                 f"{plat_name} — {svc[4]}\n\n"
                 f"🔢 Buyurtma miqdorini kiriting:\n\n"
@@ -1434,7 +1435,7 @@ async def guides(msg: types.Message):
         await msg.answer("📚 Qo'llanmalar yo'q"); return
     b = InlineKeyboardBuilder()
     for gid, gtitle in gs:
-        b.button(text=f"📖 {gtitle}", callback_data=f"guide_{gid}")
+        b.button(text=f"📖 {gtitle}", callback_data=f"guide_{gid}", style="primary")
     b.adjust(1)
     sent = await msg.answer(f"📚 Qo'llanmalar ro'yhati: {len(gs)} ta", reply_markup=b.as_markup())
     asyncio.create_task(auto_delete(sent, 40))
@@ -1700,7 +1701,7 @@ async def do_user_manage(msg: types.Message, state: FSMContext):
     b = InlineKeyboardBuilder()
     b.button(text="➕ Balans qo'shish", callback_data=f"uadd_{uid}", style="success")
     b.button(text="➖ Balans ayirish",  callback_data=f"usub_{uid}", style="danger")
-    b.button(text="📩 Xabar yuborish",  callback_data=f"umsg_{uid}")
+    b.button(text="📩 Xabar yuborish",  callback_data=f"umsg_{uid}", style="primary")
     b.adjust(2)
     await msg.answer(
         f"👤 {u[2] or 'Nomsiz'}\n"
@@ -1836,7 +1837,7 @@ async def pay_manual_settings(cb: types.CallbackQuery):
         st       = "✅" if pact else "❌"
         type_nm  = "Uzcart" if ptype == "uzcart" else "Humo"
         disp_nm  = pname if pname else type_nm
-        b.button(text=f"{st} {disp_nm} ({type_nm})", callback_data=f"pay_tog_{pid}")
+        b.button(text=f"{st} {disp_nm} ({type_nm})", callback_data=f"pay_tog_{pid}", style="success")
     b.button(text="➕ To'lov qo'shish", callback_data="add_mpay", style="success")
     b.adjust(1)
     try:
@@ -1975,7 +1976,7 @@ async def api_menu(msg: types.Message):
     apis = c.fetchall(); conn.close()
     b = InlineKeyboardBuilder()
     for aid, aname, aurl in apis:
-        b.button(text=f"🔑 {aname}", callback_data=f"api_{aid}")
+        b.button(text=f"🔑 {aname}", callback_data=f"api_{aid}", style="primary")
     b.button(text="➕ API qo'shish", callback_data="api_add", style="success")
     b.adjust(1)
     await msg.answer(f"🔑 API lar: {len(apis)} ta", reply_markup=b.as_markup())
@@ -2064,9 +2065,9 @@ async def api_detail(cb: types.CallbackQuery):
     if not api: await cb.answer("❌ Topilmadi"); return
     b = InlineKeyboardBuilder()
     b.button(text="🔑 API Key kiritish",  callback_data=f"api_rekey_{aid}", style="primary")
-    b.button(text="💰 Balansni ko'rish",   callback_data=f"api_bal_{aid}")
+    b.button(text="💰 Balansni ko'rish",   callback_data=f"api_bal_{aid}", style="success")
     b.button(text="❌ O'chirish",          callback_data=f"api_del_{aid}", style="danger")
-    b.button(text="◀️ Orqaga",            callback_data="api_back")
+    b.button(text="◀️ Orqaga",            callback_data="api_back", style="danger")
     b.adjust(1)
     await cb.message.answer(
         f"🔑 {api[1]}\n🌐 {api[2]}\n🔐 {api[3][:15]}...",
@@ -2081,7 +2082,7 @@ async def api_back(cb: types.CallbackQuery):
     apis = c.fetchall(); conn.close()
     b = InlineKeyboardBuilder()
     for aid, aname, aurl in apis:
-        b.button(text=f"🔑 {aname}", callback_data=f"api_{aid}")
+        b.button(text=f"🔑 {aname}", callback_data=f"api_{aid}", style="primary")
     b.button(text="➕ API qo'shish", callback_data="api_add", style="success")
     b.adjust(1)
     try:
@@ -2167,9 +2168,9 @@ async def show_platforms_menu(target, edit=False):
     plats = get_platforms_list()
     b = InlineKeyboardBuilder()
     for pid, pkey, pname in plats:
-        b.button(text=f"✏️ {pname}", callback_data=f"plat_ren_{pid}")
-        b.button(text="🗑",           callback_data=f"plat_del_{pid}")
-    b.button(text="➕ Platforma qo'shish", callback_data="plat_add")
+        b.button(text=f"✏️ {pname}", callback_data=f"plat_ren_{pid}", style="primary")
+        b.button(text="🗑",           callback_data=f"plat_del_{pid}", style="danger")
+    b.button(text="➕ Platforma qo'shish", callback_data="plat_add", style="success")
     b.adjust(2)
     # Adjust: har satr 2 tugma (nom + o'chirish), oxirgi 1 tugma
     # Manualroq usul:
@@ -2177,8 +2178,8 @@ async def show_platforms_menu(target, edit=False):
     rows = []
     for pid, pkey, pname in plats:
         rows.append([
-            InlineKeyboardButton(text=f"✏️ {pname}", callback_data=f"plat_ren_{pid}"),
-            InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"plat_del_{pid}"),
+            InlineKeyboardButton(text=f"✏️ {pname}", callback_data=f"plat_ren_{pid}", style="primary"),
+            InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"plat_del_{pid}", style="danger"),
         ])
     rows.append([InlineKeyboardButton(text="➕ Platforma qo'shish", callback_data="plat_add", style="success")])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
@@ -2323,10 +2324,10 @@ async def main_settings(msg: types.Message):
     prem_emoji    = get_setting("premium_emoji", "1")
 
     b = InlineKeyboardBuilder()
-    b.button(text=f"💰 Referal bonus: {ref_bonus}",         callback_data="set_ref_bonus")
-    b.button(text=f"💱 Valyuta: {currency}",                callback_data="set_currency")
-    b.button(text=f"⏱ Xizmat vaqti (kun): {svc_time}",     callback_data="set_svc_time")
-    b.button(text=f"{'✅' if prem_emoji=='1' else '❌'} Premium emoji", callback_data="tog_prem_emoji")
+    b.button(text=f"💰 Referal bonus: {ref_bonus}",         callback_data="set_ref_bonus", style="primary")
+    b.button(text=f"💱 Valyuta: {currency}",                callback_data="set_currency", style="primary")
+    b.button(text=f"⏱ Xizmat vaqti (kun): {svc_time}",     callback_data="set_svc_time", style="success")
+    b.button(text=f"{'✅' if prem_emoji=='1' else '❌'} Premium emoji", callback_data="tog_prem_emoji", style="success" if prem_emoji=="1" else "primary")
     b.adjust(1)
 
     await msg.answer(
@@ -2389,7 +2390,7 @@ async def set_svc_time_cb(cb: types.CallbackQuery):
     cur_val = get_setting("service_time", "1")
     b = InlineKeyboardBuilder()
     for d in ["1", "3", "7", "14", "30"]:
-        b.button(text=f"{'✅ ' if cur_val==d else ''}{d} kun", callback_data=f"svc_time_{d}")
+        b.button(text=f"{'✅ ' if cur_val==d else ''}{d} kun", callback_data=f"svc_time_{d}", style="success" if cur_val==d else "primary")
     b.adjust(3)
     await cb.message.answer(
         f"⏱ Xizmat bajarilish vaqtini tanlang:\nHozirgi: {cur_val} kun",
@@ -2421,10 +2422,10 @@ async def tog_prem_emoji(cb: types.CallbackQuery):
     currency   = get_setting("currency", "Sum")
     svc_time   = get_setting("service_time", "1")
     b = InlineKeyboardBuilder()
-    b.button(text=f"💰 Referal bonus: {ref_bonus}",         callback_data="set_ref_bonus")
-    b.button(text=f"💱 Valyuta: {currency}",                callback_data="set_currency")
-    b.button(text=f"⏱ Xizmat vaqti (kun): {svc_time}",     callback_data="set_svc_time")
-    b.button(text=f"{'✅' if new_val=='1' else '❌'} Premium emoji", callback_data="tog_prem_emoji")
+    b.button(text=f"💰 Referal bonus: {ref_bonus}",         callback_data="set_ref_bonus", style="primary")
+    b.button(text=f"💱 Valyuta: {currency}",                callback_data="set_currency", style="primary")
+    b.button(text=f"⏱ Xizmat vaqti (kun): {svc_time}",     callback_data="set_svc_time", style="success")
+    b.button(text=f"{'✅' if new_val=='1' else '❌'} Premium emoji", callback_data="tog_prem_emoji", style="success" if new_val=="1" else "primary")
     b.adjust(1)
     try:
         await cb.message.edit_reply_markup(reply_markup=b.as_markup())
@@ -2443,7 +2444,7 @@ async def admin_orders(msg: types.Message):
         st[s] = c.fetchone()[0]
     conn.close()
     b = InlineKeyboardBuilder()
-    b.button(text="🔍 So'nggi buyurtmalar", callback_data="search_orders")
+    b.button(text="🔍 So'nggi buyurtmalar", callback_data="search_orders", style="primary")
     await msg.answer(
         f"📈 Buyurtmalar: {total} ta\n\n"
         f"✅ Bajarilganlar: {st['completed']} ta\n"
@@ -2498,7 +2499,7 @@ async def svc_percent_start(msg: types.Message, state: FSMContext):
     ns = c.fetchone()[0]; conn.close()
     b = InlineKeyboardBuilder()
     for p in ["5", "10", "15", "20", "25", "30", "50"]:
-        b.button(text=f"+{p}%", callback_data=f"svcp_{p}")
+        b.button(text=f"+{p}%", callback_data=f"svcp_{p}", style="success")
     b.adjust(4)
     await state.set_state(AS.svc_percent_input)
     await msg.answer(
@@ -2569,7 +2570,7 @@ async def cat_menu(msg: types.Message):
     for cid, cname, cplat, cact in cats:
         status    = "✅" if cact else "❌"
         plat_icon = get_platforms().get(cplat, cplat)
-        b.button(text=f"{status} {plat_icon} {cname}", callback_data=f"cat_{cid}")
+        b.button(text=f"{status} {plat_icon} {cname}", callback_data=f"cat_{cid}", style="primary")
     b.button(text="➕ Bo'lim qo'shish", callback_data="cat_add", style="success")
     b.adjust(1)
     await msg.answer(f"📂 Bo'limlar: {len(cats)} ta", reply_markup=b.as_markup())
@@ -2581,9 +2582,9 @@ async def cat_add(cb: types.CallbackQuery, state: FSMContext):
     rows = []
     for i in range(0, len(plats), 2):
         row = []
-        row.append(InlineKeyboardButton(text=plats[i][2], callback_data=f"cat_plat_{plats[i][1]}"))
+        row.append(InlineKeyboardButton(text=plats[i][2], callback_data=f"cat_plat_{plats[i][1]}", style="primary"))
         if i+1 < len(plats):
-            row.append(InlineKeyboardButton(text=plats[i+1][2], callback_data=f"cat_plat_{plats[i+1][1]}"))
+            row.append(InlineKeyboardButton(text=plats[i+1][2], callback_data=f"cat_plat_{plats[i+1][1]}", style="primary"))
         rows.append(row)
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     try:
@@ -2640,7 +2641,7 @@ async def cat_detail(cb: types.CallbackQuery):
     b = InlineKeyboardBuilder()
     b.button(text="❌ O'chirish" if cat[3] else "✅ Faollashtirish", callback_data=f"cat_tog_{cid}", style="danger" if cat[3] else "success")
     b.button(text="➕ Xizmat qo'shish",  callback_data=f"cat_svc_add_{cid}", style="success")
-    b.button(text="📋 Xizmatlar ro'yhat", callback_data=f"cat_svcs_{cid}")
+    b.button(text="📋 Xizmatlar ro'yhat", callback_data=f"cat_svcs_{cid}", style="primary")
     b.button(text="🗑 Bo'limni o'chirish", callback_data=f"cat_del_{cid}", style="danger")
     b.adjust(2)
     try:
@@ -2693,7 +2694,7 @@ async def cat_svc_add(cb: types.CallbackQuery, state: FSMContext):
     await state.update_data(new_svc_cat=cid)
     b = InlineKeyboardBuilder()
     for aid, aname in apis:
-        b.button(text=f"🔑 {aname}", callback_data=f"svc_api_{aid}")
+        b.button(text=f"🔑 {aname}", callback_data=f"svc_api_{aid}", style="primary")
     b.adjust(1)
     try:
         await cb.message.edit_text("🔑 API ni tanlang:", reply_markup=b.as_markup())
@@ -2754,7 +2755,7 @@ async def svc_api_id_h(msg: types.Message, state: FSMContext):
 
     b = InlineKeyboardBuilder()
     b.button(text="✅ Tasdiqlash va saqlash", callback_data="svc_confirm_save", style="success")
-    b.button(text="✏️ Nomni o'zgartirish",   callback_data="svc_edit_name")
+    b.button(text="✏️ Nomni o'zgartirish",   callback_data="svc_edit_name", style="primary")
     b.adjust(1)
 
     await msg.answer(
@@ -2789,7 +2790,7 @@ async def svc_confirm_save(cb: types.CallbackQuery, state: FSMContext):
 
     b = InlineKeyboardBuilder()
     b.button(text="➕ Yana xizmat qo'shish", callback_data=f"cat_svc_add_{cat_id}", style="success")
-    b.button(text="📋 Xizmatlar ro'yhati",   callback_data=f"cat_svcs_{cat_id}")
+    b.button(text="📋 Xizmatlar ro'yhati",   callback_data=f"cat_svcs_{cat_id}", style="primary")
     b.adjust(2)
 
     await state.clear()
@@ -2832,7 +2833,7 @@ async def svc_add_name(msg: types.Message, state: FSMContext):
 
     b = InlineKeyboardBuilder()
     b.button(text="✅ Tasdiqlash va saqlash", callback_data="svc_confirm_save", style="success")
-    b.button(text="✏️ Nomni o'zgartirish",   callback_data="svc_edit_name")
+    b.button(text="✏️ Nomni o'zgartirish",   callback_data="svc_edit_name", style="primary")
     b.adjust(1)
 
     await msg.answer(
@@ -2860,7 +2861,7 @@ async def cat_svcs(cb: types.CallbackQuery):
     b = InlineKeyboardBuilder()
     for sid, sname, sprice, sact in svcs:
         st = "✅" if sact else "❌"
-        b.button(text=f"{st} {sname} — {sprice:.2f} {cur()}", callback_data=f"admin_svc_{sid}")
+        b.button(text=f"{st} {sname} — {sprice:.2f} {cur()}", callback_data=f"admin_svc_{sid}", style="primary")
     b.button(text="➕ Xizmat qo'shish", callback_data=f"cat_svc_add_{cid}", style="success")
     b.adjust(1)
     try:
@@ -2888,7 +2889,7 @@ async def all_svcs(msg: types.Message):
     for sid, sname, sprice, sact, cname, cplat in svcs:
         st = "✅" if sact else "❌"
         plat_icon = get_platforms().get(cplat, cplat)
-        b.button(text=f"{st} {plat_icon} {sname} — {sprice:.2f} {cur()}", callback_data=f"admin_svc_{sid}")
+        b.button(text=f"{st} {plat_icon} {sname} — {sprice:.2f} {cur()}", callback_data=f"admin_svc_{sid}", style="primary")
     b.adjust(1)
     await msg.answer(f"📋 Barcha xizmatlar ({len(svcs)} ta):", reply_markup=b.as_markup())
 
