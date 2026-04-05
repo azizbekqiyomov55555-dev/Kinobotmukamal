@@ -545,34 +545,41 @@ class AS(StatesGroup):
 # ─────────────────────────────────────────────────────────────
 #  KEYBOARDS
 # ─────────────────────────────────────────────────────────────
+def kbtn(text: str, style: str = None) -> dict:
+    """Rangli KeyboardButton dict (Bot API 9.4+)"""
+    btn = {"text": text}
+    if style:
+        btn["style"] = style
+    return btn
+
 def main_kb(is_admin=False):
     rows = [
-        [KeyboardButton(text="Buyurtma berish")],
-        [KeyboardButton(text="Buyurtmalar"),    KeyboardButton(text="Hisobim")],
-        [KeyboardButton(text="Pul ishlash"),    KeyboardButton(text="Hisob to'ldirish")],
-        [KeyboardButton(text="Murojaat"),        KeyboardButton(text="Qo'llanma")],
+        [kbtn("Buyurtma berish", "primary")],
+        [kbtn("Buyurtmalar"), kbtn("Hisobim", "primary")],
+        [kbtn("Pul ishlash", "success"), kbtn("Hisob to'ldirish", "success")],
+        [kbtn("Murojaat"), kbtn("Qo'llanma")],
     ]
     if is_admin:
-        rows.append([KeyboardButton(text="🗄 Boshqaruv")])
+        rows.append([kbtn("🗄 Boshqaruv", "primary")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 def admin_kb():
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="⚙️ Asosiy sozlamalar")],
-        [KeyboardButton(text="📊 Statistika"),         KeyboardButton(text="📨 Xabar yuborish")],
-        [KeyboardButton(text="🔒 Majbur obuna kanallar")],
-        [KeyboardButton(text="💳 To'lov tizimlar"),   KeyboardButton(text="🔑 API")],
-        [KeyboardButton(text="👩‍💻 Foydalanuvchini boshqarish")],
-        [KeyboardButton(text="📚 Qo'llanmalar"),       KeyboardButton(text="📈 Buyurtmalar")],
-        [KeyboardButton(text="📁 Xizmatlar")],
-        [KeyboardButton(text="◀️ Orqaga")],
+        [kbtn("⚙️ Asosiy sozlamalar", "primary")],
+        [kbtn("📊 Statistika"), kbtn("📨 Xabar yuborish", "primary")],
+        [kbtn("🔒 Majbur obuna kanallar")],
+        [kbtn("💳 To'lov tizimlar", "success"), kbtn("🔑 API", "primary")],
+        [kbtn("👩‍💻 Foydalanuvchini boshqarish")],
+        [kbtn("📚 Qo'llanmalar"), kbtn("📈 Buyurtmalar")],
+        [kbtn("📁 Xizmatlar", "primary")],
+        [kbtn("◀️ Orqaga", "danger")],
     ], resize_keyboard=True)
 
 def back_kb():
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="◀️ Orqaga")]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=[[kbtn("◀️ Orqaga", "danger")]], resize_keyboard=True)
 
 def cancel_kb():
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Bekor qilish")]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=[[kbtn("❌ Bekor qilish", "danger")]], resize_keyboard=True)
 
 def platforms_inline_kb():
     plats = get_platforms_list()
@@ -2472,9 +2479,9 @@ async def svc_home(msg: types.Message):
     c.execute("SELECT COUNT(*) FROM services");   ns = c.fetchone()[0]
     conn.close()
     kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="📂 Bo'limlar"),      KeyboardButton(text="🛠 Barcha xizmatlar")],
-        [KeyboardButton(text="📊 Foiz qo'shish"),  KeyboardButton(text="🌐 Platformalar")],
-        [KeyboardButton(text="◀️ Orqaga")],
+        [kbtn("📂 Bo'limlar", "primary"), kbtn("🛠 Barcha xizmatlar", "primary")],
+        [kbtn("📊 Foiz qo'shish", "success"), kbtn("🌐 Platformalar")],
+        [kbtn("◀️ Orqaga", "danger")],
     ], resize_keyboard=True)
     await msg.answer(
         f"📁 Xizmatlar boshqaruvi\n\n"
